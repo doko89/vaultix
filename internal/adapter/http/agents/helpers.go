@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/vaultix/vaultix/internal/domain"
 	agentuc "github.com/vaultix/vaultix/internal/usecase/agent"
@@ -55,10 +58,100 @@ func TransportSecure(ctx context.Context) bool {
 	return secure
 }
 
-// transportSecure reads TLS state from the live request: direct TLS only
-// (r.TLS != nil). Terminated-proxies must re-encrypt to the manager; an
-// X-Forwarded-Proto claim alone never unlocks key issuance.
-func transportSecure(r *http.Request) bool { return r.TLS != nil }
+// trustedProxyNets is the VAULTIX_TRUSTED_PROXIES set: reverse proxies
+// permitted to assert X-Forwarded-Proto. Empty means none. Written once at
+// boot via SetTrustedProxies, read on every key-issuing request.
+var (
+	trustedProxyMu   sync.RWMutex
+	trustedProxyNets []netip.Prefix
+)
+
+// SetTrustedProxies replaces the trusted reverse-proxy set from a
+// comma-separated CIDR list (bare IPs count as single-host prefixes); ""
+// clears it (no proxy trusted). An invalid entry fails closed with an error
+// and leaves the previous set untouched.
+func SetTrustedProxies(csv string) error {
+	var nets []netip.Prefix
+	for _, tok := range strings.Split(csv, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(tok); err == nil {
+			nets = append(nets, p.Masked())
+			continue
+		}
+		if addr, err := netip.ParseAddr(tok); err == nil {
+			nets = append(nets, netip.PrefixFrom(addr, addr.BitLen()))
+			continue
+		}
+		return fmt.Errorf("agents: invalid trusted proxy %q: want CIDR or IP", tok)
+	}
+	trustedProxyMu.Lock()
+	defer trustedProxyMu.Unlock()
+	trustedProxyNets = nets
+	return nil
+}
+
+// IsSecure reports whether r arrived over an encrypted transport, for the
+// key-issuance gate (and any sibling gate, e.g. DB credentials): direct TLS
+// always counts, with no proxy configuration needed. Otherwise the request
+// counts as secure only when its peer IP belongs to the trusted-proxy set
+// AND it carries X-Forwarded-Proto: https. Everything else — untrusted or
+// missing signals, unparseable peer — reads insecure (fail closed).
+func IsSecure(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	if !forwardedProtoHTTPS(r) {
+		return false
+	}
+	peer, ok := peerIP(r.RemoteAddr)
+	if !ok {
+		return false
+	}
+	trustedProxyMu.RLock()
+	defer trustedProxyMu.RUnlock()
+	for _, p := range trustedProxyNets {
+		if p.Contains(peer) {
+			return true
+		}
+	}
+	return false
+}
+
+// forwardedProtoHTTPS reports whether the leftmost X-Forwarded-Proto value
+// claims https (the de-facto original-scheme slot).
+func forwardedProtoHTTPS(r *http.Request) bool {
+	for _, v := range r.Header.Values("X-Forwarded-Proto") {
+		for _, tok := range strings.Split(v, ",") {
+			if s := strings.TrimSpace(tok); s != "" {
+				return strings.EqualFold(s, "https")
+			}
+		}
+	}
+	return false
+}
+
+// peerIP parses the peer IP out of a RemoteAddr ("ip:port" or bare IP).
+func peerIP(remoteAddr string) (netip.Addr, bool) {
+	host := strings.TrimSpace(remoteAddr)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	addr, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
+// transportSecure reads secure-transport state from the live request for the
+// TransportSecure context mark (see IsSecure).
+func transportSecure(r *http.Request) bool { return IsSecure(r) }
 
 // errNotConfigured marks protocol seams the wiring left unwired. It maps to
 // an explicit 501, never a silent no-op.

@@ -48,13 +48,23 @@ func newServeCommand(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the Manager (API + scheduler + web UI)",
+		Long: `Run the Manager (API + scheduler + web UI).
+
+TLS: pass --tls-cert and --tls-key (or VAULTIX_TLS_CERT / VAULTIX_TLS_KEY)
+to serve HTTPS (TLS 1.2+); with neither set the manager serves plain HTTP
+with a loud warning. Encrypted-backup data keys are issued only over a
+secure transport: direct TLS, or X-Forwarded-Proto: https from a proxy
+listed in VAULTIX_TRUSTED_PROXIES (comma-separated CIDRs, empty = none).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			bindRunFlags(cmd)
+			bindTLSFlags(cmd)
 			return runServe(cmd.Context(), *configPath, skipMigrations)
 		},
 	}
 	registerFlags(cmd, false)
 	cmd.Flags().BoolVar(&skipMigrations, "skip-migrations", false, "skip automatic `migrate up` on boot")
+	cmd.Flags().String("tls-cert", "", "TLS certificate PEM file for HTTPS (env VAULTIX_TLS_CERT); requires --tls-key")
+	cmd.Flags().String("tls-key", "", "TLS private key PEM file for HTTPS (env VAULTIX_TLS_KEY); requires --tls-cert")
 	return cmd
 }
 
@@ -67,6 +77,14 @@ func runServe(ctx context.Context, configPath string, skipMigrations bool) error
 		return err
 	}
 	log := newLogger(cfg.LogLevel)
+	certFile, keyFile := resolveTLSFiles()
+	if err := validateTLSFiles(certFile, keyFile); err != nil {
+		return err
+	}
+	if err := agentshttp.SetTrustedProxies(resolveTrustedProxies()); err != nil {
+		return fmt.Errorf("trusted proxies: %w", err)
+	}
+	logTransportMode(log, certFile)
 	log.Info("manager starting", "version", version, "config", cfg.Redacted())
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -120,6 +138,8 @@ func runServe(ctx context.Context, configPath string, skipMigrations bool) error
 		Addr:            cfg.Addr,
 		Handler:         mux,
 		ShutdownTimeout: cfg.ShutdownTimeout(),
+		CertFile:        certFile,
+		KeyFile:         keyFile,
 		Logger:          log,
 	}
 	log.Info("manager serving", "addr", cfg.Addr)
