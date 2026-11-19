@@ -214,13 +214,14 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger)
 	scheduleSvc := scheduleuc.NewService(repos.Schedules, repos.Policies,
 		scheduleuc.WithLimits(0, globalLimit))
 
-	// TODO(agents): wire a real CancelNotifier (agents track owns the
-	// push/flag mechanism); until then cancellation is visible on the
-	// agent's next poll/report revalidation.
+	// Cancellations are tracked in memory (single-instance scope) so agent
+	// polls surface cancelled_job_ids; the persisted cancelled state stays
+	// authoritative and ReportResult revalidates regardless.
 	jobSvc := jobuc.NewService(jobuc.Deps{
 		Jobs:     repos.BackupJobs,
 		Agents:   repos.Agents,
 		Policies: repos.Policies,
+		Cancels:  jobuc.NewMemoryCancelNotifier(),
 		Limits:   jobuc.ConcurrencyLimits{MaxGlobal: globalLimit},
 	})
 
@@ -232,10 +233,6 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("backup service: %w", err)
 	}
-	// TODO(recovery): drive backupSvc.CompleteJob from the job-completion
-	// flow (no caller exists yet; the agent report shape carries no
-	// manifest fields).
-	_ = backupSvc
 
 	retentionSvc, err := retentionuc.New(retentionuc.Deps{
 		Snapshots: repos.Snapshots,
@@ -274,6 +271,13 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger)
 	go runSessionJanitor(ctx, log, sessions, cfg.JanitorInterval())
 	go runDispatcher(ctx, log, scheduleSvc, runner, gate, notifSvc, cfg.DispatchInterval())
 
+	keys := keyIssuerFor(repos, storageBox, auditSvc, log)
+	dataPlane := &agentDataPlane{
+		jobs: jobSvc, restores: repos.RestoreJobs, snapshots: repos.Snapshots,
+		storage: storageSvc, store: repos.Storage,
+		keys: keys, clock: domain.SystemClock{},
+	}
+
 	return &wired{
 		sched: sched,
 		slices: adapterhttp.SliceDeps{
@@ -290,8 +294,13 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger)
 			Agents: agentshttp.Deps{
 				Agents:    agentSvc,
 				Discovery: discoverySvc,
-				Jobs:      &agentJobQueue{jobs: jobSvc, agents: repos.Agents, policies: repos.Policies, log: log},
-				Logger:    log,
+				Jobs: &agentJobQueue{
+					jobs: jobSvc, agents: repos.Agents, policies: repos.Policies,
+					backup: backupSvc, keys: keys, log: log,
+				},
+				Grants:   dataPlane,
+				Restores: dataPlane,
+				Logger:   log,
 			},
 			Policies: policieshttp.Deps{
 				Policies:  policySvc,
@@ -319,6 +328,12 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger)
 			},
 		},
 	}, nil
+}
+
+// keyIssuerFor builds the data-key issuer over the storage secret profiles,
+// the envelope box, and the audit trail.
+func keyIssuerFor(repos *repo.Repos, box *storageSecretBox, audit *audituc.Service, log *slog.Logger) *keyIssuer {
+	return &keyIssuer{store: repos.Storage, box: box, audit: audit, log: log}
 }
 
 // s3ResolveFunc loads a destination row plus its credential profile,

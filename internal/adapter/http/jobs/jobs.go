@@ -29,9 +29,13 @@ type Service interface {
 }
 
 // Deps wires the routes. Validate is optional; Mount builds a default one.
+// WriteGate optionally enforces roles on the mutating routes (create, retry,
+// cancel); reads stay open to any caller the outer router authenticated. Nil
+// disables the role check (unit tests, unwired gates).
 type Deps struct {
-	Service  Service
-	Validate *validator.Validate
+	Service   Service
+	Validate  *validator.Validate
+	WriteGate func(http.HandlerFunc) http.HandlerFunc
 }
 
 // Mount registers the job routes on r.
@@ -40,12 +44,16 @@ func Mount(r chi.Router, deps Deps) {
 	if h.validate == nil {
 		h.validate = validator.New()
 	}
+	write := deps.WriteGate
+	if write == nil {
+		write = func(next http.HandlerFunc) http.HandlerFunc { return next }
+	}
 	r.Route("/api/jobs", func(r chi.Router) {
 		r.Get("/", h.list)
-		r.Post("/", h.create)
+		r.Post("/", write(h.create))
 		r.Get("/{id}", h.detail)
-		r.Post("/{id}/retry", h.retry)
-		r.Post("/{id}/cancel", h.cancel)
+		r.Post("/{id}/retry", write(h.retry))
+		r.Post("/{id}/cancel", write(h.cancel))
 	})
 }
 

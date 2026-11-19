@@ -89,12 +89,20 @@ func (s *Service) CompleteJob(ctx context.Context, jobID string, report Completi
 	if len(report.Targets) == 0 {
 		return nil, fmt.Errorf("%w: completion report has no target results", domain.ErrValidation)
 	}
+	return s.runCompletion(ctx, job, pv.Compression, report)
+}
 
+// runCompletion assembles the snapshot manifest for an uploaded job and runs
+// the verification gate. It is shared by CompleteJob (structured reports)
+// and CompleteJobFlat (flat agent manifests): the job succeeds if and only
+// if the manifest and ALL required objects verify; anything else fails the
+// job with a *CompletionError.
+func (s *Service) runCompletion(ctx context.Context, job *domain.BackupJob, compression domain.Compression, report CompletionReport) (*VerificationResult, error) {
 	now := s.clock.Now()
 	job.UpdatedAt = now
 	snap, manifest, objects, err := AssembleManifest(ManifestInput{
 		Job:               job,
-		Compression:       pv.Compression,
+		Compression:       compression,
 		Targets:           report.Targets,
 		ManifestObjectKey: report.ManifestObjectKey,
 		ManifestChecksum:  report.ManifestChecksum,
@@ -131,7 +139,7 @@ func (s *Service) CompleteJob(ctx context.Context, jobID string, report Completi
 	}
 	job.UpdatedAt = s.clock.Now()
 	if !res.OK {
-		return res, s.failJob(ctx, job, "verification_failed", verificationSummary(res))
+		return res, s.failJobWithResult(ctx, job, "verification_failed", verificationSummary(res), res)
 	}
 	if err := domain.TransitionTo(&job.State, domain.JobSucceeded); err != nil {
 		return nil, err
@@ -149,8 +157,15 @@ func (s *Service) CompleteJob(ctx context.Context, jobID string, report Completi
 	return res, s.jobs.UpdateJob(ctx, job)
 }
 
-// failJob records a failed completion without ever reporting success.
+// failJob records a failed completion without ever reporting success. The
+// returned *CompletionError carries the code/message so the agent protocol
+// can surface the actionable outcome (the job is already failed).
 func (s *Service) failJob(ctx context.Context, job *domain.BackupJob, code, msg string) error {
+	return s.failJobWithResult(ctx, job, code, msg, nil)
+}
+
+// failJobWithResult is failJob with the verification result attached.
+func (s *Service) failJobWithResult(ctx context.Context, job *domain.BackupJob, code, msg string, res *VerificationResult) error {
 	// Best effort: move toward failed from any non-terminal state.
 	if !job.State.Terminal() {
 		if job.State == domain.JobUploading {
@@ -166,7 +181,7 @@ func (s *Service) failJob(ctx context.Context, job *domain.BackupJob, code, msg 
 	if uerr := s.jobs.UpdateJob(ctx, job); uerr != nil {
 		return uerr
 	}
-	return fmt.Errorf("backup completion failed [%s]: %s", code, msg)
+	return &CompletionError{Code: code, Message: msg, Result: res}
 }
 
 // verificationSummary condenses gate failures for the job error detail.

@@ -105,16 +105,38 @@ type heartbeatResponse struct {
 }
 
 type pollResponse struct {
-	Jobs       []QueuedJob `json:"jobs"`
-	ServerTime time.Time   `json:"server_time"`
+	Jobs            []QueuedJob `json:"jobs"`
+	CancelledJobIDs []string    `json:"cancelled_job_ids"`
+	ServerTime      time.Time   `json:"server_time"`
+}
+
+type reportManifestObjectDTO struct {
+	Key       string `json:"key" validate:"required,max=1024"`
+	SizeBytes uint64 `json:"size_bytes"`
+	SHA256    string `json:"sha256" validate:"required,max=128"`
+}
+
+type reportManifestEncryptionDTO struct {
+	Enabled bool   `json:"enabled"`
+	KeyRef  string `json:"key_ref,omitempty" validate:"max=256"`
+}
+
+type reportManifestDTO struct {
+	Objects         []reportManifestObjectDTO    `json:"objects" validate:"required,min=1,max=20000,dive"`
+	BytesRead       *uint64                      `json:"bytes_read,omitempty"`
+	BytesCompressed *uint64                      `json:"bytes_compressed,omitempty"`
+	BytesUploaded   *uint64                      `json:"bytes_uploaded,omitempty"`
+	Compression     string                       `json:"compression,omitempty" validate:"max=32"`
+	Encryption      *reportManifestEncryptionDTO `json:"encryption,omitempty"`
 }
 
 type reportJobDTO struct {
-	JobID         string  `json:"job_id" validate:"required,max=128"`
-	State         string  `json:"state" validate:"required,max=32"`
-	Error         string  `json:"error" validate:"max=4096"`
-	BytesRead     *uint64 `json:"bytes_read,omitempty"`
-	BytesUploaded *uint64 `json:"bytes_uploaded,omitempty"`
+	JobID         string             `json:"job_id" validate:"required,max=128"`
+	State         string             `json:"state" validate:"required,max=32"`
+	Error         string             `json:"error" validate:"max=4096"`
+	BytesRead     *uint64            `json:"bytes_read,omitempty"`
+	BytesUploaded *uint64            `json:"bytes_uploaded,omitempty"`
+	Manifest      *reportManifestDTO `json:"manifest,omitempty"`
 }
 
 type reportResourceDTO struct {
@@ -129,7 +151,85 @@ type reportRequest struct {
 }
 
 type reportResponse struct {
-	OK                bool `json:"ok"`
-	JobAccepted       bool `json:"job_accepted"`
-	ResourcesIngested int  `json:"resources_ingested"`
+	OK                bool     `json:"ok"`
+	JobAccepted       bool     `json:"job_accepted"`
+	ResourcesIngested int      `json:"resources_ingested"`
+	Verified          *bool    `json:"verified,omitempty"`
+	VerifyFailures    []string `json:"verify_failures,omitempty"`
+	SnapshotID        string   `json:"snapshot_id,omitempty"`
+}
+
+// --- Grant DTOs ---
+
+type grantObjectDTO struct {
+	Key       string `json:"key" validate:"required,max=1024"`
+	SizeBytes uint64 `json:"size_bytes"`
+}
+
+type uploadGrantsRequest struct {
+	Objects []grantObjectDTO `json:"objects" validate:"required,min=1,max=1000,dive"`
+}
+
+type uploadGrantsResponse struct {
+	Grants []ObjectGrant `json:"grants"`
+}
+
+type multipartInitRequest struct {
+	Key       string `json:"key" validate:"required,max=1024"`
+	SizeBytes uint64 `json:"size_bytes"`
+	PartSize  int64  `json:"part_size" validate:"required,min=1048576,max=5368709120"`
+}
+
+type multipartInitResponse struct {
+	UploadID string   `json:"upload_id"`
+	Key      string   `json:"key"`
+	PartURLs []string `json:"part_urls"`
+}
+
+type multipartPartDTO struct {
+	Number int    `json:"number" validate:"min=1,max=10000"`
+	ETag   string `json:"etag" validate:"required,max=256"`
+}
+
+type multipartCompleteRequest struct {
+	Key      string             `json:"key" validate:"required,max=1024"`
+	UploadID string             `json:"upload_id" validate:"required,max=256"`
+	Parts    []multipartPartDTO `json:"parts" validate:"required,min=1,max=10000,dive"`
+}
+
+type multipartAbortRequest struct {
+	Key      string `json:"key" validate:"required,max=1024"`
+	UploadID string `json:"upload_id" validate:"required,max=256"`
+}
+
+type multipartDoneResponse struct {
+	OK  bool   `json:"ok"`
+	Key string `json:"key,omitempty"`
+}
+
+// --- Restore DTOs ---
+
+type restorePollRequest struct {
+	AgentID string `json:"agent_id" validate:"required,max=128"`
+}
+
+type restorePollResponse struct {
+	Restore *RestoreAssignment `json:"restore"`
+}
+
+type downloadGrantsRequest struct {
+	Keys []string `json:"keys" validate:"required,min=1,max=10000,dive,max=1024"`
+}
+
+type downloadGrantsResponse struct {
+	Grants []ObjectGrant `json:"grants"`
+}
+
+type restoreReportRequest struct {
+	State string `json:"state" validate:"required,max=32"`
+	Error string `json:"error" validate:"max=4096"`
+}
+
+type restoreReportResponse struct {
+	OK bool `json:"ok"`
 }

@@ -13,7 +13,7 @@ func newRootCommand() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&configPath, "config", "", "config file path (YAML; default ./manager.yaml, /etc/vaultix/manager.yaml)")
-	root.AddCommand(newServeCommand(&configPath), newMigrateCommand(&configPath), newVersionCommand())
+	root.AddCommand(newServeCommand(&configPath), newMigrateCommand(&configPath), newSeedAdminCommand(&configPath), newVersionCommand())
 	return root
 }
 

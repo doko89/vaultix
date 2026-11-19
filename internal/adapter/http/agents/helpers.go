@@ -31,12 +31,38 @@ var errBodyTooLarge = errors.New("request body too large")
 
 type ctxKey int
 
-const credentialKey ctxKey = iota
+const (
+	credentialKey ctxKey = iota
+	transportSecureKey
+)
 
 func credentialFrom(ctx context.Context) *domain.AgentCredential {
 	cred, _ := ctx.Value(credentialKey).(*domain.AgentCredential)
 	return cred
 }
+
+// ContextWithTransportSecure marks whether the agent connection arrived over
+// TLS. Key issuance (poll/restore encryption envelopes) reads it: key_b64 is
+// minted only on TLS transports, never over plaintext.
+func ContextWithTransportSecure(ctx context.Context, secure bool) context.Context {
+	return context.WithValue(ctx, transportSecureKey, secure)
+}
+
+// TransportSecure reports whether ctx was marked TLS-secured. Missing marks
+// (direct service calls, tests) read as insecure: key material is withheld.
+func TransportSecure(ctx context.Context) bool {
+	secure, _ := ctx.Value(transportSecureKey).(bool)
+	return secure
+}
+
+// transportSecure reads TLS state from the live request: direct TLS only
+// (r.TLS != nil). Terminated-proxies must re-encrypt to the manager; an
+// X-Forwarded-Proto claim alone never unlocks key issuance.
+func transportSecure(r *http.Request) bool { return r.TLS != nil }
+
+// errNotConfigured marks protocol seams the wiring left unwired. It maps to
+// an explicit 501, never a silent no-op.
+var errNotConfigured = errors.New("service not configured")
 
 type errorBody struct {
 	Error errorDetail `json:"error"`
@@ -66,6 +92,8 @@ func statusFor(err error) (int, string) {
 		return http.StatusConflict, "conflict"
 	case errors.Is(err, errBodyTooLarge):
 		return http.StatusRequestEntityTooLarge, "body_too_large"
+	case errors.Is(err, errNotConfigured):
+		return http.StatusNotImplemented, "not_configured"
 	default:
 		return http.StatusInternalServerError, "internal_error"
 	}
@@ -158,6 +186,54 @@ func requireAgentID(r *http.Request) (string, error) {
 	id := agentIDFromPath(r)
 	if strings.TrimSpace(id) == "" {
 		return "", fmt.Errorf("%w: agent id is required", domain.ErrValidation)
+	}
+	return id, nil
+}
+
+// jobIDFromAgentPath parses /api/agent/jobs/{id}[/...] without router help.
+func jobIDFromAgentPath(r *http.Request) string {
+	return segmentAfter(r, "/api/agent/jobs/")
+}
+
+// restoreIDFromPath parses /api/agent/restores/{id}[/...] without router
+// help. The bare /api/agent/restores/poll path yields "".
+func restoreIDFromPath(r *http.Request) string {
+	id := segmentAfter(r, "/api/agent/restores/")
+	if id == "poll" {
+		return ""
+	}
+	return id
+}
+
+func segmentAfter(r *http.Request, prefix string) string {
+	path := r.URL.EscapedPath()
+	if path == "" {
+		path = r.URL.Path
+	}
+	rest, ok := strings.CutPrefix(path, prefix)
+	if !ok || rest == "" {
+		return ""
+	}
+	id, _, _ := strings.Cut(rest, "/")
+	unescaped, err := url.PathUnescape(id)
+	if err != nil {
+		return ""
+	}
+	return unescaped
+}
+
+func requireJobID(r *http.Request) (string, error) {
+	id := jobIDFromAgentPath(r)
+	if strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("%w: job id is required", domain.ErrValidation)
+	}
+	return id, nil
+}
+
+func requireRestoreID(r *http.Request) (string, error) {
+	id := restoreIDFromPath(r)
+	if strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("%w: restore id is required", domain.ErrValidation)
 	}
 	return id, nil
 }
