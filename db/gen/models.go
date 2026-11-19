@@ -51,6 +51,19 @@ type AgentHeartbeat struct {
 	Payload        []byte             `json:"payload"`
 }
 
+type ApiKey struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Name       string             `json:"name"`
+	KeyHash    []byte             `json:"key_hash"`
+	KeyPrefix  string             `json:"key_prefix"`
+	Scopes     []string           `json:"scopes"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type ApplicationStack struct {
 	ID          pgtype.UUID        `json:"id"`
 	AgentID     pgtype.UUID        `json:"agent_id"`
