@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: Go (vet, build, test, lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test ./...
+      - name: golangci-lint
+        if: hashFiles('.golangci.yml') != ''
+        uses: golangci/golangci-lint-action@v8
+      - name: sqlc diff check (non-blocking)
+        # Fails the step (not the job) when generated code drifts from
+        # db/queries + sqlc config. Skips when sqlc is not installed or no
+        # sqlc config exists yet.
+        if: hashFiles('sqlc.yaml', 'sqlc.yml', 'sqlc.json', 'db/sqlc.yaml', 'db/sqlc.yml') != ''
+        continue-on-error: true
+        run: |
+          if ! command -v sqlc >/dev/null; then
+            echo "sqlc not installed; skipping diff check (see TECH_SPEC section 7 to install)"
+            exit 0
+          fi
+          sqlc diff
+
+  web:
+    name: Web (typecheck, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: typecheck
+        run: npx tsc -b
+      - name: build
+        run: npm run build

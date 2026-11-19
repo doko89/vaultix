@@ -1,0 +1,22 @@
+# golangci-lint config (v1 + v2 compatible). Submit gate per TECH_SPEC section 6.
+# Sensible starter set for Go 1.22+: correctness (govet, errcheck), dead code
+# (staticcheck, ineffassign, unused), plus a light gosec subset tuned for this
+# repo (agent shells out to db tools by design; Manager uses short-lived creds).
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+linters-settings:
+  govet:
+    enable-all: false
+  gosec:
+    excludes:
+      - G104 # audit errors: covered by errcheck
+      - G204 # subprocess with variable: pg_dump/mysqldump/sqlcmd by design (TECH_SPEC section 4)
+run:
+  timeout: 5m
+  tests: true
