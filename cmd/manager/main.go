@@ -1,28 +1,19 @@
-// Command manager is the Vaultix Manager entrypoint (skeleton).
+// Command manager is the Vaultix Manager entrypoint: API + scheduler +
+// embedded web UI (control plane).
 package main
 
 import (
 	"fmt"
 	"os"
-
-	"github.com/spf13/cobra"
 )
 
 var version = "0.0.0-dev"
 
 func main() {
-	root := &cobra.Command{
-		Use:   "manager",
-		Short: "Vaultix Manager: centralized backup control plane",
-	}
-	root.AddCommand(&cobra.Command{
-		Use:   "version",
-		Short: "Print version",
-		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Println("manager", version)
-		},
-	})
-	if err := root.Execute(); err != nil {
+	if err := newRootCommand().Execute(); err != nil {
+		// Cobra silences usage/errors (SilenceUsage/SilenceErrors), so the
+		// error is printed here exactly once.
+		fmt.Fprintln(os.Stderr, "manager:", err)
 		os.Exit(1)
 	}
 }
