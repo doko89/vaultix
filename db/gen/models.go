@@ -51,6 +51,28 @@ type AgentHeartbeat struct {
 	Payload        []byte             `json:"payload"`
 }
 
+type ApplicationStack struct {
+	ID          pgtype.UUID        `json:"id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	ComposePath string             `json:"compose_path"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ApplicationStackResource struct {
+	ID           pgtype.UUID        `json:"id"`
+	StackID      pgtype.UUID        `json:"stack_id"`
+	ResourceID   string             `json:"resource_id"`
+	Selector     string             `json:"selector"`
+	ResourceType string             `json:"resource_type"`
+	RestoreOrder int32              `json:"restore_order"`
+	Required     bool               `json:"required"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AuditLog struct {
 	ID         pgtype.UUID        `json:"id"`
 	ActorID    pgtype.UUID        `json:"actor_id"`
@@ -241,6 +263,19 @@ type SecretProfile struct {
 	CreatedBy       pgtype.UUID        `json:"created_by"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Session struct {
+	ID             pgtype.UUID        `json:"id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	TokenHash      string             `json:"token_hash"`
+	OidcProviderID pgtype.UUID        `json:"oidc_provider_id"`
+	IDToken        pgtype.Text        `json:"id_token"`
+	Ip             string             `json:"ip"`
+	UserAgent      string             `json:"user_agent"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
 }
 
 type Snapshot struct {

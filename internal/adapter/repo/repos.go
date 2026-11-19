@@ -51,7 +51,7 @@ func New(pool *pgxpool.Pool) *Repos {
 		BackupJobs:    &BackupJobRepo{baseRepo: base},
 		RestoreJobs:   &RestoreJobRepo{baseRepo: base},
 		Snapshots:     &SnapshotRepo{baseRepo: base},
-		Stacks:        newStackRepo(),
+		Stacks:        &StackRepo{baseRepo: base},
 		Notifications: &NotificationRepo{baseRepo: base},
 		Audit:         &AuditRepo{baseRepo: base},
 	}
