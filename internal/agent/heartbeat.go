@@ -37,6 +37,10 @@ type HeartbeatRunner struct {
 	Hostname string
 	Version  string
 	Logger   *slog.Logger
+	// Capabilities is the advertised set computed once at run start
+	// (DetectCapabilities). Nil leaves the manager's stored set untouched;
+	// non-nil replaces it, driving PollJobs capability filtering.
+	Capabilities []string
 
 	// NewBackOff builds the backoff strategy; defaults to DefaultBackOff.
 	// It is a seam for deterministic tests.
@@ -69,6 +73,7 @@ func (r *HeartbeatRunner) Beat(ctx context.Context) (HeartbeatResponse, error) {
 		AgentID:         r.Config.AgentID,
 		Hostname:        hostname,
 		Version:         r.Version,
+		Capabilities:    r.Capabilities,
 		DockerAvailable: r.Config.DockerEnabled,
 		At:              time.Now().UTC(),
 	})

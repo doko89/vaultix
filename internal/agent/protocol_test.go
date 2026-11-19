@@ -63,6 +63,7 @@ func TestKindToTargetType(t *testing.T) {
 	assert.Equal(t, "host_filesystem", KindToTargetType("filesystem"))
 	assert.Equal(t, "docker_volume", KindToTargetType("docker-volume"))
 	assert.Equal(t, "postgres", KindToTargetType("postgres"))
+	assert.Equal(t, "mssql", KindToTargetType("mssql"))
 	assert.Equal(t, "restore-file", KindToTargetType("restore-file"))
 }
 

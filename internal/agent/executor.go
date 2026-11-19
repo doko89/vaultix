@@ -15,7 +15,7 @@ import (
 )
 
 // UnsupportedError is the structured, actionable error for target types and
-// job kinds this agent cannot execute (mssql, redis, stack members, ...).
+// job kinds this agent cannot execute (redis, stack members, ...).
 // It is a job failure, never a crash.
 type UnsupportedError struct {
 	JobID      string
@@ -34,7 +34,7 @@ func (e *UnsupportedError) Error() string {
 	if e.Detail != "" {
 		msg += ": " + e.Detail
 	} else {
-		msg += ": this agent build handles host_filesystem, docker_volume, postgres, mysql"
+		msg += ": this agent build handles host_filesystem, docker_volume, postgres, mysql, mssql"
 	}
 	return msg
 }
@@ -130,7 +130,7 @@ func (e *Executor) ExecuteTarget(ctx context.Context, job PolledJob, idx int, tg
 		return nil, fmt.Errorf("agent: job %s: create staging dir: %w", job.ID, err)
 	}
 	switch ttype {
-	case TargetHostFilesystem, TargetDockerVolume, TargetPostgres, TargetMySQL:
+	case TargetHostFilesystem, TargetDockerVolume, TargetPostgres, TargetMySQL, TargetMSSQL:
 		return e.runSupportedTarget(ctx, job, idx, ttype, tgt)
 	default:
 		return nil, &UnsupportedError{JobID: job.ID, Kind: job.Kind, TargetType: ttype, Selector: tgt.Selector}
@@ -166,7 +166,7 @@ func (e *Executor) runSupportedTarget(ctx context.Context, job PolledJob, idx in
 		_ = f.Close()
 		return nil, fmt.Errorf("agent: job %s: create zstd encoder: %w", job.ID, err)
 	}
-	bytesRead, runErr := e.produce(ctx, job, ttype, tgt, zenc)
+	bytesRead, runErr := e.produce(ctx, job, idx, ttype, tgt, zenc)
 	closeErr := zenc.Close()
 	if ew != nil {
 		if cerr := ew.Close(); cerr != nil && runErr == nil {
@@ -208,14 +208,17 @@ func artifactSuffix(ttype string) string {
 		return ".dump.zst"
 	case TargetMySQL:
 		return ".sql.zst"
+	case TargetMSSQL:
+		return ".bak.zst"
 	default:
 		return ".tar.zst"
 	}
 }
 
 // produce runs the target-type producer into the zstd stream and returns
-// pre-compression bytes read. Callers close the stream.
-func (e *Executor) produce(ctx context.Context, job PolledJob, ttype string, tgt Target, zw io.Writer) (bytesRead int64, err error) {
+// pre-compression bytes read. Callers close the stream. idx disambiguates
+// per-target staging files (mssql .bak).
+func (e *Executor) produce(ctx context.Context, job PolledJob, idx int, ttype string, tgt Target, zw io.Writer) (bytesRead int64, err error) {
 	opts := tgt.Options
 	if opts == nil {
 		opts = map[string]any{}
@@ -263,6 +266,12 @@ func (e *Executor) produce(ctx context.Context, job PolledJob, ttype string, tgt
 			return 0, fmt.Errorf("agent: job %s: %w", job.ID, err)
 		}
 		return DumpMySQL(ctx, zw, job.ID, tgt.Selector, dopts, e.LookPath)
+	case TargetMSSQL:
+		mopts, err := ParseMSSQLOptions(opts)
+		if err != nil {
+			return 0, fmt.Errorf("agent: job %s: %w", job.ID, err)
+		}
+		return BackupMSSQL(ctx, zw, job.ID, idx, tgt.Selector, mopts, e.workDirFor(job.ID), e.LookPath)
 	default:
 		return 0, &UnsupportedError{JobID: job.ID, Kind: job.Kind, TargetType: ttype, Selector: tgt.Selector}
 	}

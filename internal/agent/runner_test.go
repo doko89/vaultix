@@ -111,7 +111,7 @@ func TestRunOneJobSkipsAlreadyReported(t *testing.T) {
 		polls.Add(1)
 		return PollResponse{Jobs: []PolledJob{{
 			ID: "job-done", PolicyID: "p", Kind: "filesystem",
-			Targets: []Target{{Type: "mssql", Selector: "db"}}, // would fail if executed
+			Targets: []Target{{Type: "redis", Selector: "cache"}}, // would fail if executed
 		}}}, nil
 	}
 	r := testRunner(t, stub)

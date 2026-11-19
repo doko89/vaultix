@@ -147,7 +147,11 @@ func newRunCommand(configPath *string) *cobra.Command {
 			}
 
 			mgr := agent.NewHTTPManagerClient(cfg.ManagerURL, cfg.Token, cfg.RequestTimeout)
-			hb := &agent.HeartbeatRunner{Client: mgr, Config: cfg, Version: version, Logger: log}
+			// Capability advertisement is probed once at run start and
+			// cached for the process (mssql iff sqlcmd answers its
+			// version probe). The manager filters polls on this set.
+			caps := agent.LogCapabilities(log, cfg.DockerEnabled)
+			hb := &agent.HeartbeatRunner{Client: mgr, Config: cfg, Version: version, Logger: log, Capabilities: caps}
 
 			var lister agent.DockerLister
 			if cfg.DockerEnabled {
