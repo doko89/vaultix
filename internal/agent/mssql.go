@@ -340,9 +340,11 @@ func mssqlServer(host string, port int) string {
 }
 
 // runSQLCmd executes sqlcmd with a context timeout and process-group kill,
-// capturing the capped stderr tail. extraEnv carries SQLCMDPASSWORD only
-// (never argv). Failures return a password-scrubbed ExecError; TLS/-cert
-// failures without trust_server_cert carry the actionable remediation.
+// capturing the capped stderr tail (capped stdout tail when stderr is
+// empty: go-sqlcmd reports failures on stdout). extraEnv carries
+// SQLCMDPASSWORD only (never argv). Failures return a password-scrubbed
+// ExecError; TLS/-cert failures without trust_server_cert carry the
+// actionable remediation.
 func runSQLCmd(ctx context.Context, jobID, bin string, args []string, password string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = DefaultDumpTimeout
@@ -356,10 +358,20 @@ func runSQLCmd(ctx context.Context, jobID, bin string, args []string, password s
 		cmd.Env = append(os.Environ(), "SQLCMDPASSWORD="+password)
 	}
 	tail := &tailStringWriter{max: MaxStderrBytes}
-	cmd.Stdout = io.Discard // BACKUP progress (STATS=10) is noise; the .bak is the payload
+	outTail := &tailStringWriter{max: MaxStderrBytes}
+	// BACKUP progress (STATS=10) is noise on success and discarded with
+	// the tails; on failure the stdout tail is the detail fallback (see
+	// below), so it is captured capped rather than discarded.
+	cmd.Stdout = outTail
 	cmd.Stderr = tail
 	if err := cmd.Run(); err != nil {
 		stderr := redactSecret(tail.String(), password)
+		if stderr == "" {
+			// go-sqlcmd reports failures (login errors, T-SQL errors)
+			// on stdout while classic sqlcmd uses stderr: fall back
+			// to the capped stdout tail so the cause stays actionable.
+			stderr = redactSecret(outTail.String(), password)
+		}
 		cause := redactSecret(err.Error(), password)
 		ee := &ExecError{JobID: jobID, Stage: "sqlcmd", Command: "sqlcmd",
 			Stderr: stderr, At: time.Now().UTC(), Cause: cause}

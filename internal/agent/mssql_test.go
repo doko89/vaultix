@@ -26,6 +26,7 @@ import (
 //	SQLCMD_STUB_WANT_PW  fail (exit 3) unless $SQLCMDPASSWORD equals it
 //	SQLCMD_STUB_EXIT     exit code for backup runs (default 0)
 //	SQLCMD_STUB_STDERR   line printed to stderr on backup runs
+//	SQLCMD_STUB_STDOUT   line printed to stdout on backup runs
 //	SQLCMD_STUB_SKIP_BAK "1" = exit 0 without writing the .bak
 //	SQLCMD_STUB_EMPTY_BAK "1" = write a 0-byte .bak
 //	SQLCMD_STUB_SLEEP    seconds to sleep before acting (timeout tests)
@@ -45,6 +46,7 @@ if [ "$SQLCMDPASSWORD" != "$SQLCMD_STUB_WANT_PW" ]; then
 echo "expected SQLCMDPASSWORD in environment" >&2; exit 3; fi
 fi
 if [ -n "$SQLCMD_STUB_STDERR" ]; then echo "$SQLCMD_STUB_STDERR" >&2; fi
+if [ -n "$SQLCMD_STUB_STDOUT" ]; then echo "$SQLCMD_STUB_STDOUT"; fi
 if [ "$SQLCMD_STUB_SKIP_BAK" != "1" ]; then
 q=""; prev=""
 for a in "$@"; do if [ "$prev" = "-Q" ]; then q="$a"; fi; prev="$a"; done
@@ -261,6 +263,28 @@ func TestBackupMSSQLStderrCaptureAndRedaction(t *testing.T) {
 	assert.Contains(t, execErr.Stderr, "[REDACTED]")
 	assert.NotContains(t, execErr.Stderr, pw)
 	assert.NotContains(t, execErr.Cause, pw)
+	assert.NotContains(t, err.Error(), pw)
+}
+
+func TestBackupMSSQLStdoutFallbackWhenStderrEmpty(t *testing.T) {
+	// go-sqlcmd reports failures (e.g. login errors) on stdout with an
+	// empty stderr: the stdout tail must surface as the actionable
+	// detail, still password-scrubbed.
+	const pw = "leakM3-hunter2"
+	fakeSQLCmd(t, map[string]string{
+		"SQLCMD_STUB_EXIT":   "1",
+		"SQLCMD_STUB_STDOUT": "mssql: login error: Login failed for user 'vaultix_app' with password '" + pw + "'",
+	})
+	var out bytes.Buffer
+	_, err := BackupMSSQL(context.Background(), &out, "job-9s", 0, "appdb",
+		MSSQLOptions{Password: pw, CredentialIssued: true}, t.TempDir(), nil)
+	require.Error(t, err)
+	var execErr *ExecError
+	require.ErrorAs(t, err, &execErr)
+	assert.Equal(t, 1, execErr.ExitCode)
+	assert.Contains(t, execErr.Stderr, "Login failed for user 'vaultix_app'")
+	assert.Contains(t, execErr.Stderr, "[REDACTED]")
+	assert.NotContains(t, execErr.Stderr, pw)
 	assert.NotContains(t, err.Error(), pw)
 }
 
