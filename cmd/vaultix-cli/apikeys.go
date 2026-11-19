@@ -9,11 +9,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// API-key DTOs target the SIBLING user-API-keys track (/api/api-keys CRUD),
-// which lands in parallel: shapes below are this CLI's assumptions, decoded
-// leniently (unknown fields ignored, both {items:[...]} and bare [...] list
-// shapes accepted) so small server drifts reconcile in the endpoint table
-// and these structs rather than in command logic.
+// API-key DTOs target the user-API-keys slice (/api/api-keys CRUD):
+// shapes below match the server exactly (ttl_hours float, revocation as
+// revoked_at), decoded leniently (unknown fields ignored, both
+// {items:[...]} and bare [...] list shapes accepted) so small server
+// drifts reconcile in the endpoint table and these structs rather than in
+// command logic.
 type apiKeyJSON struct {
 	ID         string     `json:"id"`
 	Name       string     `json:"name"`
@@ -21,14 +22,14 @@ type apiKeyJSON struct {
 	KeyPrefix  string     `json:"key_prefix"`
 	ExpiresAt  *time.Time `json:"expires_at"`
 	LastUsedAt *time.Time `json:"last_used_at"`
-	Revoked    bool       `json:"revoked"`
+	RevokedAt  *time.Time `json:"revoked_at"`
 	CreatedAt  *time.Time `json:"created_at"`
 }
 
 type apiKeyCreateRequest struct {
-	Name   string   `json:"name"`
-	Scopes []string `json:"scopes,omitempty"`
-	TTL    string   `json:"ttl,omitempty"`
+	Name     string   `json:"name"`
+	Scopes   []string `json:"scopes,omitempty"`
+	TTLHours float64  `json:"ttl_hours,omitempty"`
 }
 
 // secretFieldNames are the candidate JSON fields carrying the shown-once key
@@ -62,7 +63,7 @@ func (a *app) newAPIKeysCommand() *cobra.Command {
 					for _, k := range keys {
 						rows = append(rows, []string{
 							k.ID, k.Name, fmtList(k.Scopes), orDash(k.KeyPrefix),
-							fmtTime(k.ExpiresAt), fmtBool(k.Revoked),
+							fmtTime(k.ExpiresAt), fmtBool(k.RevokedAt != nil),
 						})
 					}
 					writeTable(cmd.OutOrStdout(),
@@ -101,10 +102,18 @@ func (a *app) newAPIKeysCreateCommand() *cobra.Command {
 			if name == "" {
 				return fmt.Errorf("missing required flag --name")
 			}
+			var ttlHours float64
+			if t := strings.TrimSpace(ttl); t != "" {
+				d, err := time.ParseDuration(t)
+				if err != nil {
+					return fmt.Errorf("invalid --ttl %q: want a Go duration like 720h (server bounds 1m..8760h)", t)
+				}
+				ttlHours = d.Hours()
+			}
 			body := apiKeyCreateRequest{
-				Name:   name,
-				Scopes: splitCSV(scopes),
-				TTL:    strings.TrimSpace(ttl),
+				Name:     name,
+				Scopes:   splitCSV(scopes),
+				TTLHours: ttlHours,
 			}
 			raw, err := a.call(cmd, "apikeys.create", nil, nil, body)
 			if err != nil {

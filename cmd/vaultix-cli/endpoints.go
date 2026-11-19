@@ -23,10 +23,8 @@ type endpoint struct {
 
 // endpoints is the table of every Manager route the CLI calls. It is the
 // single place to rename a path or method if the server side drifts: no
-// command hardcodes a URL. Entries marked SIBLING call the user-API-keys
-// track (/api/api-keys CRUD + Bearer auth), which lands in parallel; the
-// paths below are this CLI's assumptions and are reconciled by the
-// integrator if the sibling's exact JSON differs.
+// command hardcodes a URL. The user-API-keys entries (/api/api-keys CRUD
+// + Bearer auth) are reconciled against the server's exact shapes.
 var endpoints = map[string]endpoint{
 	// Auth (existing: internal/adapter/http/auth).
 	"auth.me": {mGet, "/api/auth/me"},
@@ -57,7 +55,7 @@ var endpoints = map[string]endpoint{
 	"restore.execute": {mPost, "/api/restore/execute"},
 	"restore.status":  {mGet, "/api/restore/status"},
 
-	// User API keys (SIBLING track; assumed CRUD shapes).
+	// User API keys (internal/adapter/http/apikeys Mount).
 	"apikeys.list":   {mGet, "/api/api-keys"},
 	"apikeys.create": {mPost, "/api/api-keys"},
 	"apikeys.revoke": {mDelete, "/api/api-keys/{id}"},

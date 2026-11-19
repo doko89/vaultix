@@ -16,6 +16,7 @@ import (
 	"github.com/vaultix/vaultix/internal/adapter/crypto"
 	adapterhttp "github.com/vaultix/vaultix/internal/adapter/http"
 	agentshttp "github.com/vaultix/vaultix/internal/adapter/http/agents"
+	apikeyshttp "github.com/vaultix/vaultix/internal/adapter/http/apikeys"
 	authhttp "github.com/vaultix/vaultix/internal/adapter/http/auth"
 	jobshttp "github.com/vaultix/vaultix/internal/adapter/http/jobs"
 	platformhttp "github.com/vaultix/vaultix/internal/adapter/http/platform"
@@ -29,6 +30,7 @@ import (
 	"github.com/vaultix/vaultix/internal/adapter/session"
 	"github.com/vaultix/vaultix/internal/domain"
 	agentuc "github.com/vaultix/vaultix/internal/usecase/agent"
+	apikeyuc "github.com/vaultix/vaultix/internal/usecase/apikey"
 	audituc "github.com/vaultix/vaultix/internal/usecase/audit"
 	authuc "github.com/vaultix/vaultix/internal/usecase/auth"
 	backupuc "github.com/vaultix/vaultix/internal/usecase/backup"
@@ -216,6 +218,12 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("user service: %w", err)
 	}
+	apikeySvc, err := apikeyuc.NewService(apikeyuc.Deps{
+		Keys: repo.NewApiKeyRepo(pool), Users: repos.Users, Audit: sink,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("apikey service: %w", err)
+	}
 
 	heartbeatTimeout := time.Duration(cfg.HeartbeatTimeoutSecs) * time.Second
 	agentSvc, err := agentuc.NewService(repos.Agents, repos.Policies, domain.SystemClock{},
@@ -305,12 +313,14 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger)
 				Auth:  authSvc,
 				Users: userSvc,
 				Audit: sink,
+				Keys:  apikeySvc,
 				// Secure per PRD §10.2 (TLS mandatory); name/path/
 				// SameSite take the slice defaults.
 				Cookie:               authhttp.CookieConfig{Secure: true},
 				OIDCRedirectURL:      cfg.OIDCRedirectURL,
 				UIRedirectAfterLogin: "/",
 			},
+			APIKeys: apikeyshttp.Deps{Service: apikeySvc},
 			Agents: agentshttp.Deps{
 				Agents:    agentSvc,
 				Discovery: discoverySvc,

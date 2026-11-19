@@ -146,12 +146,12 @@ const (
 	fixturePlan    = `{"id":"plan-1","kind":"file","agent_id":"ag-1","snapshot_ids":["snap-1"],"steps":[{"sequence":1,"kind":"file","snapshot_id":"snap-1","source":"/data","destination":"/restore"}],"warnings":["target exists"],"requested_by":"alice","created_at":1762000000,"expires_at":1762003600}`
 	fixtureConfirm = `{"token":"confirm-tok-1","plan_id":"plan-1","expires_at":"2026-11-01T12:00:00Z"}`
 	fixtureRestore = `{"id":"rj-1","agent_id":"ag-1","snapshot_id":"snap-1","state":"queued","created_at":"2026-11-01T11:00:00Z","updated_at":"2026-11-01T11:00:00Z"}`
-	fixtureKeys    = `{"items":[{"id":"kid-1","name":"ci","scopes":["read"],"key_prefix":"vxk_abc","expires_at":"2027-01-01T00:00:00Z","revoked":false}],"total":1}`
-	fixtureKeyNew  = `{"id":"kid-2","name":"ci-2","api_key":"vxk_shown_once_abc123"}`
+	fixtureKeys    = `{"items":[{"id":"kid-1","name":"ci","scopes":["read"],"key_prefix":"vxk_abc","expires_at":"2027-01-01T00:00:00Z","created_at":"2026-11-01T00:00:00Z"}],"total":1}`
+	fixtureKeyNew  = `{"id":"kid-2","name":"ci-2","key":"vxk_shown_once_abc123"}`
 )
 
 // TestCommandRequestTable pins every command's method/path/body against the
-// fake manager: this is the contract the sibling's server must satisfy.
+// fake manager, mirroring the server's exact shapes.
 func TestCommandRequestTable(t *testing.T) {
 	policyTwoAgents := `{"id":"p-9","name":"multi","agent_ids":["ag-1","ag-2"]}`
 	cases := []struct {
@@ -225,7 +225,7 @@ func TestCommandRequestTable(t *testing.T) {
 		}, []wantRequest{{"GET", "/api/api-keys", nil, ""}}},
 		{"apikeys create", []string{"apikeys", "create", "--name", "ci-2", "--scopes", "read,write", "--ttl", "720h"}, "", func(f *fakeManager) {
 			f.on("POST", "/api/api-keys", fixtureKeyNew)
-		}, []wantRequest{{"POST", "/api/api-keys", nil, `{"name":"ci-2","scopes":["read","write"],"ttl":"720h"}`}}},
+		}, []wantRequest{{"POST", "/api/api-keys", nil, `{"name":"ci-2","scopes":["read","write"],"ttl_hours":720}`}}},
 		{"apikeys revoke", []string{"apikeys", "revoke", "kid-1"}, "", func(f *fakeManager) {
 			f.on("DELETE", "/api/api-keys/kid-1", `{}`)
 		}, []wantRequest{{"DELETE", "/api/api-keys/kid-1", nil, ""}}},
@@ -541,6 +541,21 @@ func TestAPIKeysCreatePrintsKeyOnceWithWarning(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "ONCE") {
 		t.Fatalf("create should warn loudly:\n%s", stdout)
+	}
+}
+
+func TestAPIKeysCreateRejectsBadTTL(t *testing.T) {
+	f := newFakeManager(t)
+	f.on("POST", "/api/api-keys", fixtureKeyNew)
+	code, _, stderr := execCLI(t, f, "", "apikeys", "create", "--name", "ci-2", "--ttl", "not-a-duration")
+	if code == 0 {
+		t.Fatal("bad --ttl should fail")
+	}
+	if !strings.Contains(stderr, "invalid --ttl") {
+		t.Fatalf("stderr should name --ttl, got %q", stderr)
+	}
+	if len(f.requests) != 0 {
+		t.Fatalf("bad --ttl must send no request: %+v", f.requests)
 	}
 }
 

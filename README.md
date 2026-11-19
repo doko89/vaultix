@@ -35,6 +35,19 @@ Required: `MANAGER_URL` (or `--manager`) and `VAULTIX_ENROLL_TOKEN` (or `--token
 the single-use token from step 2 of the manager installer's output. Check with
 `systemctl status vaultix-agent` and `journalctl -u vaultix-agent -f`.
 
+**3. CLI (your workstation).** Download `vaultix-cli-linux-amd64` (or `-arm64`)
+from the latest release, mint a key with your login session, then verify it:
+
+```bash
+curl -fsSL -o vaultix-cli https://github.com/doko89/vaultix/releases/latest/download/vaultix-cli-linux-amd64
+chmod +x vaultix-cli
+curl -s -b vaultix_session=<session-cookie> -X POST http://<manager-host>:8080/api/api-keys \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"laptop","scopes":["read","write"]}'   # prints the key ONCE
+./vaultix-cli login --manager http://<manager-host>:8080 --api-key <key>
+./vaultix-cli agents list
+```
+
 Full manual path (migrate → seed admin → login → enroll → first backup → restore)
 is documented in [E2E bootstrap](#e2e-bootstrap) below; dev-stack equivalents live
 under [Dev quickstart](#dev-quickstart).

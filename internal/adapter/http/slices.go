@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	agentshttp "github.com/vaultix/vaultix/internal/adapter/http/agents"
+	apikeyshttp "github.com/vaultix/vaultix/internal/adapter/http/apikeys"
 	authhttp "github.com/vaultix/vaultix/internal/adapter/http/auth"
 	jobshttp "github.com/vaultix/vaultix/internal/adapter/http/jobs"
 	platformhttp "github.com/vaultix/vaultix/internal/adapter/http/platform"
@@ -20,6 +21,7 @@ import (
 // (health/metrics/SPA only).
 type SliceDeps struct {
 	Auth     authhttp.Deps
+	APIKeys  apikeyshttp.Deps
 	Agents   agentshttp.Deps
 	Policies policieshttp.Deps
 	Jobs     jobshttp.Deps
@@ -50,10 +52,11 @@ type SliceDeps struct {
 //	  policies POST/PUT/DELETE ............................ admin|operator
 //	  auth     login/logout/OIDC public; me/password ...... all authed
 //	  auth     users/roles/providers/settings ............. admin only
+//	  apikeys  CRUD (list/issue/revoke) .................... session only (keys cannot manage keys)
 //	Agent protocol (bearer, /api/agent/...): bearer-authenticated inside
 //	the handlers; never behind the session gate.
 //
-// mountSlices registers the seven slice packages. Auth mounts first and
+// mountSlices registers the eight slice packages. Auth mounts first and
 // returns the session Gate; the UI slices mount behind session auth with
 // per-route roles (roleRouter / jobs WriteGate / policies method gate),
 // while auth's public routes and the agent protocol stay off the session
@@ -62,6 +65,17 @@ func (m *Mux) mountSlices(deps SliceDeps) {
 	var gate *authhttp.Gate
 	if deps.Auth.Auth != nil {
 		gate = authhttp.Mount(m, deps.Auth)
+	}
+	// API keys manage infrastructure, never themselves: the CRUD routes
+	// are session-only (RequireSession rejects vxk_ bearers by
+	// construction). Mount on the raw router — the ui/roles routers
+	// would admit Bearer callers via RequireAuth.
+	if deps.APIKeys.Service != nil && gate != nil {
+		apikeyshttp.Mount(m, apikeyshttp.Deps{
+			Service: deps.APIKeys.Service,
+			Session: gate.RequireSession,
+			Actor:   apikeySessionActor,
+		})
 	}
 	ui := chi.Router(m)
 	if gate != nil {
@@ -117,6 +131,16 @@ func (m *Mux) mountPolicies(deps policieshttp.Deps, gate *authhttp.Gate) {
 	}
 	m.Mount("/api/policies", h)
 	m.Mount("/api/schedules", h)
+}
+
+// apikeySessionActor resolves the session user ID for the API key slice
+// (a closure over authhttp.SessionFromContext, per that package's doc).
+func apikeySessionActor(r *nethttp.Request) (string, bool) {
+	info, ok := authhttp.SessionFromContext(r.Context())
+	if !ok || info.User.ID == "" {
+		return "", false
+	}
+	return info.User.ID, true
 }
 
 // roleRule gates one (method, pattern) pair — patterns exactly as the slice

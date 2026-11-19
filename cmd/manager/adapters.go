@@ -23,6 +23,7 @@ import (
 	platformhttp "github.com/vaultix/vaultix/internal/adapter/http/platform"
 	"github.com/vaultix/vaultix/internal/adapter/repo"
 	"github.com/vaultix/vaultix/internal/domain"
+	apikeyuc "github.com/vaultix/vaultix/internal/usecase/apikey"
 	audituc "github.com/vaultix/vaultix/internal/usecase/audit"
 	authuc "github.com/vaultix/vaultix/internal/usecase/auth"
 	backupuc "github.com/vaultix/vaultix/internal/usecase/backup"
@@ -42,6 +43,7 @@ var (
 	_ ustorage.SecretBox             = (*storageSecretBox)(nil)
 	_ authuc.ProviderSecretStore     = (*providerSecretStore)(nil)
 	_ authuc.Auditor                 = (*auditSink)(nil)
+	_ apikeyuc.Auditor               = (*auditSink)(nil)
 	_ useruc.Auditor                 = (*auditSink)(nil)
 	_ agentshttp.JobQueue            = (*agentJobQueue)(nil)
 	_ scheduleuc.JobEnqueuer         = (*scheduleJobEnqueuer)(nil)

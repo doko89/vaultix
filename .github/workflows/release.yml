@@ -48,22 +48,24 @@ jobs:
         run: |
           npm --prefix web ci
           npm --prefix web run build
-      - name: build manager + agent
+      - name: build manager + agent + cli
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
           mkdir -p dist
-          # Both binaries share `var version` in package main (cmd/manager +
-          # cmd/agent); there is no separate commit symbol, so the short SHA
-          # rides along in the version string: v1.2.3+abc1234.
+          # All binaries share `var version` in package main (cmd/manager +
+          # cmd/agent + cmd/vaultix-cli); there is no separate commit symbol,
+          # so the short SHA rides along in the version string: v1.2.3+abc1234.
           VERSION="${GITHUB_REF_NAME}+${GITHUB_SHA:0:7}"
           echo "version: ${VERSION}"
           go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
             -o "dist/vaultix-manager-${GOOS}-${GOARCH}" ./cmd/manager
           go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
             -o "dist/vaultix-agent-${GOOS}-${GOARCH}" ./cmd/agent
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "dist/vaultix-cli-${GOOS}-${GOARCH}" ./cmd/vaultix-cli
           ls -la dist/
       - uses: actions/upload-artifact@v4
         with:

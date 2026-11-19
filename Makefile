@@ -85,6 +85,7 @@ release-dry: ## Dry-run release binaries (linux/amd64) into dist/ with CI naming
 	VERSION="$$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)"; \
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w -X main.version=$$VERSION" -o dist/vaultix-manager-linux-amd64 ./cmd/manager; \
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w -X main.version=$$VERSION" -o dist/vaultix-agent-linux-amd64 ./cmd/agent; \
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w -X main.version=$$VERSION" -o dist/vaultix-cli-linux-amd64 ./cmd/vaultix-cli; \
 	(cd dist && sha256sum vaultix-* > sha256sums.txt); \
 	cat dist/sha256sums.txt
 
