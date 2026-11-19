@@ -200,7 +200,7 @@ func (r *Runner) runOneJob(ctx context.Context, job PolledJob) {
 		_ = r.Store.Upsert(rec)
 		r.reportProgress(ctx, job.ID, JobUploading, rec.BytesRead, rec.BytesUploaded)
 	}
-	uploaded, upErr := up.UploadJob(ctx, job.ID, arts)
+	uploaded, upErr := uploadWithManifest(ctx, job, r.Config.AgentID, &exec, &up, arts)
 	if upErr != nil {
 		if cancelled, shutdown := interrupted(); shutdown {
 			_ = r.Store.Upsert(rec)
@@ -234,7 +234,10 @@ func (r *Runner) runOneJob(ctx context.Context, job PolledJob) {
 		exec.Cleanup(job.ID)
 		return
 	}
-	log.Info("job succeeded", "objects", len(uploaded))
+	// The report only proves upload + acceptance: the manager verifies the
+	// manifest and decides the job outcome (a 200 with verified:false still
+	// lands here, by design, and must not read as success).
+	log.Info("job uploaded, report accepted", "objects", len(uploaded))
 	exec.Cleanup(job.ID)
 }
 

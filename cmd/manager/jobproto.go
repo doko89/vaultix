@@ -515,6 +515,11 @@ func (p *agentDataPlane) assignRestore(ctx context.Context, agentID string, job 
 	}
 	if strings.TrimSpace(job.TargetPath) != "" {
 		out.Destination = agentshttp.RestoreDestination{Mode: "alternate", Path: job.TargetPath}
+	} else if strings.HasPrefix(snap.Selector, "/") {
+		// In-place restores name the original absolute path so the agent
+		// has a concrete destination. Non-path selectors (volume names, db
+		// names) stay empty and the agent refuses loudly.
+		out.Destination = agentshttp.RestoreDestination{Mode: "original", Path: snap.Selector}
 	}
 	if snap.Encrypted && agentshttp.TransportSecure(ctx) {
 		if b64, ok := p.keys.openDataKey(ctx, agentID, snap.KeyRef, "restore"); ok {
@@ -655,6 +660,42 @@ func (p *agentDataPlane) snapshotKeys(ctx context.Context, snap *domain.Snapshot
 	return allowed, nil
 }
 
+// restoreChain is the non-terminal lifecycle order shared by backup and
+// restore jobs.
+var restoreChain = []domain.JobState{
+	domain.JobQueued, domain.JobAssigned, domain.JobRunning,
+	domain.JobUploading, domain.JobVerifying,
+}
+
+// advanceRestoreState moves state toward target through legal steps. Agents
+// report running/terminal states directly (never the intermediate upload
+// steps), so the walk implies them; each step is still a legal transition,
+// same-state reports are idempotent, and anything unparsable conflicts.
+func advanceRestoreState(state *domain.JobState, target domain.JobState) error {
+	for i := 0; i <= len(restoreChain); i++ {
+		if *state == target {
+			return nil
+		}
+		if state.CanTransitionTo(target) {
+			return domain.TransitionTo(state, target)
+		}
+		idx := -1
+		for n, s := range restoreChain {
+			if s == *state {
+				idx = n
+				break
+			}
+		}
+		if idx < 0 || idx+1 >= len(restoreChain) {
+			break
+		}
+		if err := domain.TransitionTo(state, restoreChain[idx+1]); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("%w: illegal job transition %s -> %s", domain.ErrConflict, *state, target)
+}
+
 // ReportRestore applies an agent execution report to a restore job. Reports
 // on terminal jobs and illegal transitions conflict loudly; nothing is
 // persisted for them.
@@ -666,7 +707,7 @@ func (p *agentDataPlane) ReportRestore(ctx context.Context, agentID, restoreID s
 	if job.State.Terminal() {
 		return fmt.Errorf("jobproto: cannot report on terminal restore %s (%s): %w", restoreID, job.State, domain.ErrConflict)
 	}
-	if err := domain.TransitionTo(&job.State, rep.State); err != nil {
+	if err := advanceRestoreState(&job.State, rep.State); err != nil {
 		return fmt.Errorf("jobproto: restore %s: %w", restoreID, err)
 	}
 	now := p.now()

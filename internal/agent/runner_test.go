@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,12 +41,14 @@ func testRunner(t *testing.T, stub *StubManagerClient) *Runner {
 func TestRunOneJobSuccessEndToEnd(t *testing.T) {
 	f, srv := newFakeGrantServer(t, 0)
 	stub := &StubManagerClient{}
+	var grantCalls atomic.Int64
 	stub.OnUploadGrants = func(jobID string, req UploadGrantsRequest) (UploadGrantsResponse, error) {
 		grants := make([]UploadGrant, 0, len(req.Objects))
-		for i, o := range req.Objects {
+		for _, o := range req.Objects {
+			n := grantCalls.Add(1) - 1
 			grants = append(grants, UploadGrant{
 				Key: fmt.Sprintf("tenant/jobs/%s/%s", jobID, o.Key),
-				URL: fmt.Sprintf("%s/up/%d", srv.URL, i),
+				URL: fmt.Sprintf("%s/up/%d", srv.URL, n),
 			})
 		}
 		return UploadGrantsResponse{Grants: grants}, nil
@@ -62,7 +68,7 @@ func TestRunOneJobSuccessEndToEnd(t *testing.T) {
 	assert.Equal(t, JobSucceeded, last.State)
 	require.NotNil(t, last.Manifest, "success must carry a manifest")
 	m := last.Manifest
-	require.Len(t, m.Objects, 1)
+	require.Len(t, m.Objects, 2, "data object + job manifest")
 	assert.Equal(t, "tenant/jobs/job-e2e/t0-host_filesystem.tar.zst", m.Objects[0].Key)
 	// Manifest sha256 matches the bytes the fake storage received.
 	sum := sha256.Sum256(f.store["/up/0"])
@@ -71,6 +77,23 @@ func TestRunOneJobSuccessEndToEnd(t *testing.T) {
 	assert.Equal(t, uint64(len(content)), m.BytesRead)
 	assert.Equal(t, "zstd", m.Compression.Algo)
 	assert.False(t, m.Encryption.Enabled)
+	// The job manifest is uploaded second and attests the data key.
+	require.Equal(t, "tenant/jobs/job-e2e/manifest.json", m.Objects[1].Key)
+	msum := sha256.Sum256(f.store["/up/1"])
+	assert.Equal(t, hex.EncodeToString(msum[:]), m.Objects[1].SHA256)
+	assert.Equal(t, int64(len(f.store["/up/1"])), m.Objects[1].SizeBytes)
+	dec, err := zstd.NewReader(bytes.NewReader(f.store["/up/1"]))
+	require.NoError(t, err)
+	raw, err := io.ReadAll(dec)
+	dec.Close()
+	require.NoError(t, err)
+	var doc JobManifestDoc
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	require.Equal(t, "job-e2e", doc.JobID)
+	require.Len(t, doc.Objects, 1)
+	assert.Equal(t, "t0-host_filesystem.tar.zst", doc.Objects[0].Name)
+	assert.Equal(t, m.Objects[0].Key, doc.Objects[0].Key)
+	assert.Equal(t, m.Objects[0].SHA256, doc.Objects[0].SHA256)
 	// Progress reports precede the terminal one.
 	assert.Greater(t, len(stub.Reports), 1)
 	assert.Equal(t, JobRunning, stub.Reports[0].State)

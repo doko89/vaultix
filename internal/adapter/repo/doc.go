@@ -53,6 +53,6 @@
 //   - Audit outcome "ok" maps to "success" (the DB check value).
 //   - AgentCredential requires an agent: unclaimed enrollment tokens cannot
 //     be stored (agent_credentials.agent_id is NOT NULL).
-//   - Stacks have no tables in scope (migrations are frozen), so StackRepo
-//     is a thread-safe in-memory store until a stacks migration lands.
+//   - Stacks live in the stacks tables (migration 00012); StackRepo is
+//     pgx-backed like the other stores.
 package repo

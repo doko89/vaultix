@@ -1,6 +1,9 @@
 package agents
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Every request DTO is validated at the boundary (validator tags plus manual
 // checks in the handlers). Responses never carry plaintext credentials
@@ -126,8 +129,33 @@ type reportManifestDTO struct {
 	BytesRead       *uint64                      `json:"bytes_read,omitempty"`
 	BytesCompressed *uint64                      `json:"bytes_compressed,omitempty"`
 	BytesUploaded   *uint64                      `json:"bytes_uploaded,omitempty"`
-	Compression     string                       `json:"compression,omitempty" validate:"max=32"`
+	Compression     compressionDTO               `json:"compression,omitempty" validate:"max=32"`
 	Encryption      *reportManifestEncryptionDTO `json:"encryption,omitempty"`
+}
+
+// compressionDTO accepts the agent's compression record either as a bare
+// string ("zstd") or as an object ({"algo":"zstd","level":3}). It is
+// informational only (the pinned policy version owns the record), so the
+// object form keeps the algorithm name.
+type compressionDTO string
+
+// UnmarshalJSON decodes the string form directly and the object form via
+// its algo field; anything else is a validation error at the boundary.
+func (c *compressionDTO) UnmarshalJSON(raw []byte) error {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		*c = compressionDTO(s)
+		return nil
+	}
+	var obj struct {
+		Algo  string `json:"algo"`
+		Level int    `json:"level"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return err
+	}
+	*c = compressionDTO(obj.Algo)
+	return nil
 }
 
 type reportJobDTO struct {

@@ -201,6 +201,39 @@ func TestReportWithManifestDrivesCompletion(t *testing.T) {
 	}
 }
 
+func TestReportManifestCompressionObjectForm(t *testing.T) {
+	r, jobs, _, _ := v1Router()
+	rep := r.find("POST", "/api/agent/report")
+
+	// The agent sends compression as {"algo","level"}; the server keeps the
+	// algorithm name and still drives completion.
+	rec := do(t, rep, "POST", "/api/agent/report", `{"job":{
+		"job_id":"j1","state":"uploading",
+		"manifest":{"objects":[
+			{"key":"jobs/j1/chunk-0","size_bytes":100,"sha256":"`+strings.Repeat("a", 64)+`"},
+			{"key":"jobs/j1/manifest.json","size_bytes":50,"sha256":"`+strings.Repeat("c", 64)+`"}
+		],"compression":{"algo":"zstd","level":3},"encryption":{"enabled":false}}
+	}}`, "agent-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(jobs.completions) != 1 {
+		t.Fatalf("want completion path, reports=%d completions=%d", len(jobs.reports), len(jobs.completions))
+	}
+	if got := jobs.completions[0]; got.Manifest == nil || got.Manifest.Compression != "zstd" {
+		t.Fatalf("object compression not mapped: %+v", got.Manifest)
+	}
+
+	// A non-string, non-object compression is still a 400.
+	rec = do(t, rep, "POST", "/api/agent/report", `{"job":{
+		"job_id":"j1","state":"uploading",
+		"manifest":{"objects":[{"key":"k","size_bytes":1,"sha256":"`+strings.Repeat("b", 64)+`"}],"compression":5}
+	}}`, "agent-token")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReportLegacyPathUnchanged(t *testing.T) {
 	r, jobs, _, _ := v1Router()
 	rec := do(t, r.find("POST", "/api/agent/report"), "POST", "/api/agent/report",

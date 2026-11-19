@@ -68,7 +68,7 @@ e2e-logs: ## Follow e2e stack logs
 
 seed-admin: ## Create/update admin user in the running manager container
 	@echo "target: dev manager (for e2e use the -p variant in README)"
-	@echo "needs the jobproto track's 'manager seed-admin' (VAULTIX_ADMIN_USER/PASSWORD); fails until it lands"
+	@echo "runs 'manager seed-admin' (VAULTIX_ADMIN_USER/PASSWORD) in the dev manager"
 	$(COMPOSE) --profile dev exec \
 		-e VAULTIX_ADMIN_USER=$${VAULTIX_ADMIN_USER:-admin} \
 		-e VAULTIX_ADMIN_PASSWORD=$${VAULTIX_ADMIN_PASSWORD:?set VAULTIX_ADMIN_PASSWORD} \

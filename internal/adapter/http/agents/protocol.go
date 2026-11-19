@@ -207,7 +207,7 @@ func toJobManifest(dto *reportManifestDTO) *JobManifest {
 	}
 	m := &JobManifest{
 		BytesRead: dto.BytesRead, BytesCompressed: dto.BytesCompressed,
-		BytesUploaded: dto.BytesUploaded, Compression: dto.Compression,
+		BytesUploaded: dto.BytesUploaded, Compression: string(dto.Compression),
 	}
 	if dto.Encryption != nil {
 		enabled := dto.Encryption.Enabled

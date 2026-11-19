@@ -336,7 +336,51 @@ func (q *agentJobQueue) Report(ctx context.Context, agentID string, rep agentsht
 		outcome.ErrorMessage = rep.Error
 	}
 	_, err := q.jobs.ReportResult(ctx, agentID, rep.JobID, outcome)
+	if err == nil {
+		return nil
+	}
+	if rep.State != domain.JobFailed || !errors.Is(err, domain.ErrConflict) {
+		return err
+	}
+	// A failed report from an early state (its running progress was lost)
+	// must still land: walk the job forward, then re-apply. Anything the
+	// walk cannot fix surfaces the original conflict.
+	if werr := q.walkJobTo(ctx, rep.JobID, domain.JobFailed); werr != nil {
+		return err
+	}
+	_, err = q.jobs.ReportResult(ctx, agentID, rep.JobID, outcome)
 	return err
+}
+
+// walkJobTo advances a job along the lifecycle chain until target is
+// directly reachable. Terminal jobs are left for the caller to report on.
+func (q *agentJobQueue) walkJobTo(ctx context.Context, jobID string, target domain.JobState) error {
+	for i := 0; i <= len(restoreChain); i++ {
+		j, err := q.jobs.Get(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		if j.State == target || j.State.Terminal() {
+			return nil
+		}
+		if j.State.CanTransitionTo(target) {
+			return nil
+		}
+		idx := -1
+		for n, s := range restoreChain {
+			if s == j.State {
+				idx = n
+				break
+			}
+		}
+		if idx < 0 || idx+1 >= len(restoreChain) {
+			return fmt.Errorf("jobproto: cannot advance job %s toward %s", jobID, target)
+		}
+		if _, err := q.jobs.Transition(ctx, jobID, restoreChain[idx+1]); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("jobproto: cannot advance job %s toward %s", jobID, target)
 }
 
 // ---- schedule seams over the jobs track ----

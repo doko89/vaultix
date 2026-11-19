@@ -92,13 +92,12 @@ docker compose -f deploy/docker-compose.yml --profile dev exec manager /usr/loca
 (`manager migrate` also has `down` and `status`; host-side runs use
 `VAULTIX_DATABASE_URL=... go run ./cmd/manager migrate up`.)
 
-**3. Seed the admin user.**
-
-> **PENDING — lands in the parallel jobproto track.** The interface below is
-> the specified contract (`manager seed-admin` reads `VAULTIX_ADMIN_USER` /
-> `VAULTIX_ADMIN_PASSWORD`); until that command exists this step fails and
-> the session-gated API steps (4, 6, 7) are blocked. Agent enrollment (5)
-> still works: token issuance is intentionally public in local stacks.
+**3. Seed the admin user.** `manager seed-admin` creates the first local
+administrator (refuses when any user exists unless `--force` is passed).
+Credentials come from `VAULTIX_ADMIN_USER` / `VAULTIX_ADMIN_PASSWORD`
+(email defaults to `<user>@localhost`, overridable via
+`VAULTIX_ADMIN_EMAIL`) or the equivalent `--username` / `--password` /
+`--email` flags.
 
 ```bash
 VAULTIX_ADMIN_USER=admin VAULTIX_ADMIN_PASSWORD='change-me-strong' make seed-admin
@@ -117,7 +116,9 @@ also need `-H 'X-Requested-With: XMLHttpRequest'` (CSRF rule).
 ```bash
 curl -s -D /tmp/vaultix-headers.txt -o /dev/null -X POST $MGR/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"identifier":"admin","password":"change-me-strong"}'
+  -d '{"identifier":"admin@localhost","password":"change-me-strong"}'
+# (identifier is the admin email: seed-admin defaults it to
+# <user>@localhost, and usernames persist as the email address)
 S=$(grep -i '^set-cookie: vaultix_session=' /tmp/vaultix-headers.txt | sed 's/.*vaultix_session=\([^;]*\).*/\1/')
 AUTH="Cookie: vaultix_session=$S"
 curl -s $MGR/api/auth/me -H "$AUTH"   # your user + roles
@@ -137,13 +138,10 @@ go run ./cmd/agent enroll --manager $MGR --token "$AGENT_TOKEN" --agent-id "$AGE
 go run ./cmd/agent run        # heartbeat loop; Ctrl-C to stop
 ```
 
-> **Known gap (agent track, verified live 2026-11-19):** token issuance,
-> redeem, and `agent enroll` all work, but `agent run` heartbeats 404: the
-> agent client posts to `/api/v1/agents/heartbeat`
-> (`internal/agent/client.go`) while the manager serves the agent protocol
-> at `/api/agent/*`. Job pickup/report is blocked on the same mismatch, so
-> live backup execution waits for the agent track to align the paths; the
-> manager-side policy → schedule → job flow in step 6 works up to pickup.
+> The agent client speaks the manager's agent protocol at `/api/agent/*`
+> (heartbeat, poll, report, grants, restores); there are no `/api/v1`
+> paths left on either side, so `agent run` heartbeats, job pickup, and
+> reporting work end to end.
 
 **6. Run the first backup.** Create a policy (enabled by default), attach a
 schedule, trigger a manual run, then watch the job:
@@ -165,9 +163,8 @@ curl -s -X POST $MGR/api/schedules/$SCHED_ID/run -H "$AUTH" \
 curl -s "$MGR/api/jobs/" -H "$AUTH" | jq .   # job states incl. the new run
 ```
 
-Once the agent protocol paths align (see step 5 note), the agent picks
-the job up on its next poll and reports back; poll `GET /api/jobs/{id}`
-until `state` is `succeeded`.
+The agent picks the job up on its next poll and reports back; poll
+`GET /api/jobs/{id}` until `state` is `succeeded`.
 
 **7. Restore from the snapshot.** Once a backup has produced a snapshot,
 find it, then walk the plan → confirm → execute flow (each step is
@@ -229,7 +226,7 @@ pinned-`sqlc` drift check (`generate` + `git diff` on `db/gen`) and
 
 ## Status
 
-Manager boots (API + scheduler + migrations) and agent enrollment works;
-agent heartbeats await the agent-track protocol-path fix noted above.
-E2E bootstrap is documented above. Web UI pages outside login are still
-placeholders; `manager seed-admin` lands with the jobproto track.
+Manager boots (API + scheduler + migrations); agent enrollment,
+heartbeat, backup/restore execution, and reporting work end to end; the
+web UI wires all features to the manager API. E2E bootstrap is
+documented above.

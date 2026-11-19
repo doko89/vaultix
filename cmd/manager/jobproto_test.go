@@ -810,6 +810,107 @@ func TestRestorePollGrantReportFlow(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrConflict)
 }
 
+func TestReportRestoreDirectTerminalWalk(t *testing.T) {
+	r := newProtoRig(t)
+	ctx := context.Background()
+	r.seedSnapshot(t, "snap-1", "ag-1")
+
+	// Agents report terminal states directly from assigned: the walk
+	// implies the intermediate steps instead of conflicting.
+	r.seedRestore(t, "rst-ok", "ag-1", "snap-1", domain.JobAssigned)
+	require.NoError(t, r.plane.ReportRestore(ctx, "ag-1", "rst-ok",
+		agentshttp.RestoreReport{State: domain.JobSucceeded}))
+	stored, err := r.rjobs.GetJob(ctx, "rst-ok")
+	require.NoError(t, err)
+	require.Equal(t, domain.JobSucceeded, stored.State)
+	require.NotNil(t, stored.FinishedAt)
+
+	r.seedRestore(t, "rst-bad", "ag-1", "snap-1", domain.JobAssigned)
+	require.NoError(t, r.plane.ReportRestore(ctx, "ag-1", "rst-bad",
+		agentshttp.RestoreReport{State: domain.JobFailed, Error: "disk gone"}))
+	stored, err = r.rjobs.GetJob(ctx, "rst-bad")
+	require.NoError(t, err)
+	require.Equal(t, domain.JobFailed, stored.State)
+	require.Equal(t, "disk gone", stored.ErrorMessage)
+
+	// Failed from an intermediate state stays direct, and duplicate
+	// running reports are idempotent rather than conflicts.
+	r.seedRestore(t, "rst-mid", "ag-1", "snap-1", domain.JobRunning)
+	require.NoError(t, r.plane.ReportRestore(ctx, "ag-1", "rst-mid",
+		agentshttp.RestoreReport{State: domain.JobRunning}))
+	require.NoError(t, r.plane.ReportRestore(ctx, "ag-1", "rst-mid",
+		agentshttp.RestoreReport{State: domain.JobFailed, Error: "late failure"}))
+	stored, err = r.rjobs.GetJob(ctx, "rst-mid")
+	require.NoError(t, err)
+	require.Equal(t, domain.JobFailed, stored.State)
+
+	// Terminal jobs still conflict; nothing is persisted for them.
+	err = r.plane.ReportRestore(ctx, "ag-1", "rst-ok",
+		agentshttp.RestoreReport{State: domain.JobFailed})
+	require.ErrorIs(t, err, domain.ErrConflict)
+}
+
+func TestRestoreDestinationPaths(t *testing.T) {
+	r := newProtoRig(t)
+	ctx := context.Background()
+	r.seedSnapshot(t, "snap-1", "ag-1")
+
+	// No target path: in-place restores name the original absolute path.
+	r.seedRestore(t, "rst-orig", "ag-1", "snap-1", domain.JobQueued)
+	asg, err := r.plane.PollRestore(ctx, "ag-1")
+	require.NoError(t, err)
+	require.NotNil(t, asg)
+	require.Equal(t, "original", asg.Destination.Mode)
+	require.Equal(t, "/data", asg.Destination.Path)
+
+	// Explicit target path wins as an alternate destination.
+	require.NoError(t, r.rjobs.CreateJob(ctx, &domain.RestoreJob{
+		ID: "rst-alt", AgentID: "ag-1", SnapshotID: "snap-1",
+		State: domain.JobQueued, TargetPath: "/tmp/r",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	// Drain the queued original first (oldest first), then the alternate.
+	asg, err = r.plane.PollRestore(ctx, "ag-1")
+	require.NoError(t, err)
+	require.NotNil(t, asg)
+	if asg.ID == "rst-orig" {
+		require.NoError(t, r.plane.ReportRestore(ctx, "ag-1", "rst-orig",
+			agentshttp.RestoreReport{State: domain.JobSucceeded}))
+		asg, err = r.plane.PollRestore(ctx, "ag-1")
+		require.NoError(t, err)
+		require.NotNil(t, asg)
+	}
+	require.Equal(t, "rst-alt", asg.ID)
+	require.Equal(t, "alternate", asg.Destination.Mode)
+	require.Equal(t, "/tmp/r", asg.Destination.Path)
+}
+
+func TestQueueReportFailedWalksForward(t *testing.T) {
+	r := newProtoRig(t)
+	ctx := context.Background()
+
+	// A failed report from assigned (its running progress was lost)
+	// lands instead of conflicting.
+	r.seedJob(t, "job-early", "ag-1", domain.JobAssigned)
+	br := uint64(10)
+	require.NoError(t, r.queue.Report(ctx, "ag-1", agentshttp.JobReport{
+		JobID: "job-early", State: domain.JobFailed, Error: "exec blew up",
+		BytesRead: &br,
+	}))
+	stored, err := r.jobs.GetJob(ctx, "job-early")
+	require.NoError(t, err)
+	require.Equal(t, domain.JobFailed, stored.State)
+	require.Equal(t, "exec blew up", stored.ErrorMessage)
+	require.NotNil(t, stored.BytesRead)
+
+	// Non-terminal conflicts still surface (the walk is failed-only).
+	r.seedJob(t, "job-skip", "ag-1", domain.JobAssigned)
+	err = r.queue.Report(ctx, "ag-1", agentshttp.JobReport{
+		JobID: "job-skip", State: domain.JobUploading,
+	})
+	require.ErrorIs(t, err, domain.ErrConflict)
+}
+
 // ---------- key issuance + cancellations ----------
 
 func TestPollEncryptionIssuance(t *testing.T) {
