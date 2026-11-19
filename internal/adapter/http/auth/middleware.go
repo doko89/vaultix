@@ -76,17 +76,19 @@ var _ KeyVerifier = (*apikeysvc.Service)(nil)
 type Gate struct {
 	auth       AuthService
 	cookieName string
-	clear      func(http.ResponseWriter)
+	clear      func(http.ResponseWriter, *http.Request)
 	keys       KeyVerifier
 }
 
 // NewGate builds a Gate directly (tests and platform routers that mount
-// auth routes piecemeal instead of via Mount).
+// auth routes piecemeal instead of via Mount). Its clear-cookie carries no
+// Secure attribute; gates from Mount mirror the configured SecureMode per
+// request instead.
 func NewGate(auth AuthService, cookieName string) *Gate {
 	if cookieName == "" {
 		cookieName = "vaultix_session"
 	}
-	return &Gate{auth: auth, cookieName: cookieName, clear: func(w http.ResponseWriter) {
+	return &Gate{auth: auth, cookieName: cookieName, clear: func(w http.ResponseWriter, _ *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: cookieName, MaxAge: -1, Path: "/"})
 	}}
 }
@@ -109,7 +111,7 @@ func (g *Gate) RequireSession(next http.HandlerFunc) http.HandlerFunc {
 		info, err := g.auth.ValidateSession(r.Context(), cookie.Value)
 		if err != nil {
 			if g.clear != nil {
-				g.clear(w)
+				g.clear(w, r)
 			}
 			writeError(w, http.StatusUnauthorized, "unauthorized", "session is invalid or expired")
 			return
@@ -254,12 +256,12 @@ func actorID(r *http.Request) string {
 	return ""
 }
 
-func clearCookie(cookie CookieConfig) func(http.ResponseWriter) {
-	return func(w http.ResponseWriter) {
+func clearCookie(cookie CookieConfig) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name: cookie.Name, Value: "", Path: cookie.Path,
 			Domain: cookie.Domain, MaxAge: -1, HttpOnly: true,
-			Secure: cookie.Secure, SameSite: cookie.SameSite,
+			Secure: cookie.secureFor(r), SameSite: cookie.SameSite,
 		})
 	}
 }
