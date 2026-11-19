@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -239,6 +240,14 @@ func (r *Restorer) restoreObject(ctx context.Context, job RestoreJob, obj Restor
 		if err := WriteRestoreFile(dec, r.destDir(job.Destination.Path), name, job.OverwriteAllowed(), r.maxExtractBytes()); err != nil {
 			return nil, fmt.Errorf("agent: restore %s: object %s: %w", job.ID, obj.Key, err)
 		}
+		// Deferred-reimport kinds (mssql) deliver a native backup file the
+		// operator re-imports; log the compatibility note so it is visible
+		// in the agent log next to the delivery.
+		if note := RestoreNoteForKind(job.Kind); note != "" {
+			slog.Default().Info("agent: database restore delivered as file",
+				"restore_id", job.ID, "kind", NormalizeTargetType(job.Kind),
+				"file", name, "note", note)
+		}
 	}
 	// Drain decoder errors (e.g. decrypt failures surfacing mid-stream).
 	if pr, ok := payload.(*pipeReader); ok {
@@ -320,7 +329,7 @@ func isManifestObject(key string) bool {
 
 func isTarPayload(kind, key string) bool {
 	k := NormalizeTargetType(kind)
-	if k == TargetPostgres || k == TargetMySQL {
+	if k == TargetPostgres || k == TargetMySQL || k == TargetMSSQL {
 		return false
 	}
 	if k == TargetHostFilesystem || k == TargetDockerVolume {

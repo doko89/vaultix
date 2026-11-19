@@ -23,6 +23,7 @@ func TestDispatchMatrix(t *testing.T) {
 	// pg/mysql fakes for the db rows of the matrix.
 	fakeBin(t, "pg_dump", "printf 'PGDATA'\n")
 	fakeBin(t, "mysqldump", "printf 'MYDATA'\n")
+	fakeSQLCmd(t, nil) // mssql row: writes a fake .bak at the TO DISK path
 
 	fsRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(fsRoot, "a.txt"), []byte("filedata"), 0o644))
@@ -45,7 +46,7 @@ func TestDispatchMatrix(t *testing.T) {
 		{"docker alias", "docker-volume", "vol1", "", "voldata"},
 		{"postgres", "postgres", "appdb", "", "PGDATA"},
 		{"mysql", "mysql", "shopdb", "", "MYDATA"},
-		{"mssql unsupported", "mssql", "db", "unsupported target type", ""},
+		{"mssql", "mssql", "appdb", "", "MSSQLBAK"},
 		{"redis unsupported", "redis", "cache", "unsupported target type", ""},
 		{"stack unsupported", "stack", "web", "unsupported target type", ""},
 		{"unknown unsupported", "tape-robot", "x", "unsupported target type", ""},
@@ -149,13 +150,13 @@ func TestExecuteJobEncryptedArtifact(t *testing.T) {
 func TestExecuteJobStopsAtFirstError(t *testing.T) {
 	exec := testExecutor(t)
 	job := PolledJob{ID: "j-partial", Kind: "backup", Targets: []Target{
-		{Type: "mssql", Selector: "db"}, // unsupported → fail fast
-		{Type: "redis", Selector: "c"},
+		{Type: "redis", Selector: "c"}, // unsupported → fail fast
+		{Type: "stack", Selector: "web"},
 	}}
 	_, err := exec.ExecuteJob(context.Background(), job)
 	var uerr *UnsupportedError
 	require.ErrorAs(t, err, &uerr)
-	assert.Equal(t, "mssql", uerr.TargetType)
+	assert.Equal(t, "redis", uerr.TargetType)
 }
 
 func TestExecuteJobRejectsEmpty(t *testing.T) {

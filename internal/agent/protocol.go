@@ -54,6 +54,8 @@ func KindToTargetType(kind string) string {
 		return TargetPostgres
 	case TargetMySQL:
 		return TargetMySQL
+	case TargetMSSQL:
+		return TargetMSSQL
 	default:
 		return strings.ToLower(strings.TrimSpace(kind))
 	}
