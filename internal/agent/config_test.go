@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,5 +52,36 @@ func TestLoadMissingFileYieldsDefaults(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, DefaultConfig().HeartbeatInterval, cfg.HeartbeatInterval)
+	assert.Equal(t, DefaultConfig().PollInterval, cfg.PollInterval)
+	assert.Equal(t, DefaultConfig().RestorePollInterval, cfg.RestorePollInterval)
+	assert.Equal(t, DefaultConfig().WorkDir, cfg.WorkDir)
 	assert.Error(t, cfg.Validate(), "defaults alone must not validate without enrollment")
+}
+
+func TestConfigNewFieldsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.yaml")
+	cfg := DefaultConfig()
+	cfg.ManagerURL = "https://manager.example.test"
+	cfg.Token = "tok"
+	cfg.AgentID = "a"
+	require.NoError(t, cfg.Save(path))
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.PollInterval, loaded.PollInterval)
+	assert.Equal(t, cfg.RestorePollInterval, loaded.RestorePollInterval)
+	assert.Equal(t, cfg.WorkDir, loaded.WorkDir)
+	assert.NoError(t, loaded.Validate())
+}
+
+func TestConfigValidatePollIntervals(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ManagerURL = "https://m.example"
+	cfg.Token = "t"
+	cfg.AgentID = "a"
+	assert.NoError(t, cfg.Validate())
+	cfg.PollInterval = 0
+	assert.ErrorContains(t, cfg.Validate(), "poll_interval")
+	cfg.PollInterval = DefaultConfig().PollInterval
+	cfg.RestorePollInterval = -time.Second
+	assert.ErrorContains(t, cfg.Validate(), "restore_poll_interval")
 }

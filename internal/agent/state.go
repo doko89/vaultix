@@ -26,14 +26,25 @@ const (
 const stateFileVersion = 1
 
 // JobRecord is the minimal local job state kept for restart recovery.
+// It never carries key material: KeyRef only. Resume is re-run from scratch
+// (uploads overwrite the same manager-issued keys, so it is idempotent);
+// success is reported exactly once, at the end of a completed run.
 type JobRecord struct {
-	JobID         string    `json:"job_id"`
-	Policy        string    `json:"policy"`
-	PolicyVersion int       `json:"policy_version"`
-	State         JobState  `json:"state"`
-	Attempt       int       `json:"attempt"`
-	LastError     string    `json:"last_error,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	JobID           string    `json:"job_id"`
+	Policy          string    `json:"policy"`
+	PolicyVersion   int       `json:"policy_version"`
+	State           JobState  `json:"state"`
+	Attempt         int       `json:"attempt"`
+	LastError       string    `json:"last_error,omitempty"`
+	KeyRef          string    `json:"key_ref,omitempty"`
+	Encrypted       bool      `json:"encrypted,omitempty"`
+	TargetsDone     int       `json:"targets_done,omitempty"`
+	TargetsTotal    int       `json:"targets_total,omitempty"`
+	BytesRead       uint64    `json:"bytes_read,omitempty"`
+	BytesUploaded   uint64    `json:"bytes_uploaded,omitempty"`
+	UploadedObjects []string  `json:"uploaded_objects,omitempty"`
+	Reported        bool      `json:"reported,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type stateFile struct {

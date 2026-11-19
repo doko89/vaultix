@@ -15,43 +15,53 @@ import (
 
 // Config keys used in the agent config file and environment.
 const (
-	KeyManagerURL         = "manager_url"
-	KeyToken              = "token"
-	KeyAgentID            = "agent_id"
-	KeyHeartbeatInterval  = "heartbeat_interval"
-	KeyStateFile          = "state_file"
-	KeyDockerEnabled      = "docker_enabled"
-	KeyDockerHost         = "docker_host"
-	KeyRequestTimeout     = "request_timeout"
-	KeyCompressionLevel   = "compression_level"
-	redacted              = "***"
-	defaultRequestTimeout = 15 * time.Second
+	KeyManagerURL          = "manager_url"
+	KeyToken               = "token"
+	KeyAgentID             = "agent_id"
+	KeyHeartbeatInterval   = "heartbeat_interval"
+	KeyPollInterval        = "poll_interval"
+	KeyRestorePollInterval = "restore_poll_interval"
+	KeyStateFile           = "state_file"
+	KeyWorkDir             = "work_dir"
+	KeyDockerEnabled       = "docker_enabled"
+	KeyDockerHost          = "docker_host"
+	KeyRequestTimeout      = "request_timeout"
+	KeyCompressionLevel    = "compression_level"
+	redacted               = "***"
+	defaultRequestTimeout  = 15 * time.Second
+	defaultPollInterval    = 15 * time.Second
 )
 
 // Config is the agent runtime configuration. Token is a credential and must
 // never be logged; use Redacted for any log output.
 type Config struct {
-	ManagerURL        string        `mapstructure:"manager_url"`
-	Token             string        `mapstructure:"token"`
-	AgentID           string        `mapstructure:"agent_id"`
-	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval"`
-	StateFile         string        `mapstructure:"state_file"`
-	DockerEnabled     bool          `mapstructure:"docker_enabled"`
-	DockerHost        string        `mapstructure:"docker_host"`
-	RequestTimeout    time.Duration `mapstructure:"request_timeout"`
-	CompressionLevel  int           `mapstructure:"compression_level"`
+	ManagerURL          string        `mapstructure:"manager_url"`
+	Token               string        `mapstructure:"token"`
+	AgentID             string        `mapstructure:"agent_id"`
+	HeartbeatInterval   time.Duration `mapstructure:"heartbeat_interval"`
+	PollInterval        time.Duration `mapstructure:"poll_interval"`
+	RestorePollInterval time.Duration `mapstructure:"restore_poll_interval"`
+	StateFile           string        `mapstructure:"state_file"`
+	WorkDir             string        `mapstructure:"work_dir"`
+	DockerEnabled       bool          `mapstructure:"docker_enabled"`
+	DockerHost          string        `mapstructure:"docker_host"`
+	RequestTimeout      time.Duration `mapstructure:"request_timeout"`
+	CompressionLevel    int           `mapstructure:"compression_level"`
 }
 
 // DefaultConfig returns sane defaults. ManagerURL, Token, and AgentID have no
 // defaults and must come from enrollment.
 func DefaultConfig() Config {
 	return Config{
-		HeartbeatInterval: 30 * time.Second,
-		StateFile:         filepath.Join(userConfigDir(), "vaultix", "agent-state.json"),
-		DockerEnabled:     false,
-		DockerHost:        "",
-		RequestTimeout:    defaultRequestTimeout,
-		CompressionLevel:  3,
+		HeartbeatInterval:   30 * time.Second,
+		PollInterval:        defaultPollInterval,
+		RestorePollInterval: defaultPollInterval,
+		StateFile:           filepath.Join(userConfigDir(), "vaultix", "agent-state.json"),
+		WorkDir:             filepath.Join(os.TempDir(), "vaultix-agent"),
+		DockerEnabled:       false,
+		DockerHost:          "",
+		RequestTimeout:      defaultRequestTimeout,
+		CompressionLevel:    3,
 	}
 }
 
@@ -76,6 +86,12 @@ func (c Config) Validate() error {
 	if c.HeartbeatInterval <= 0 {
 		return fmt.Errorf("agent: heartbeat_interval must be positive")
 	}
+	if c.PollInterval <= 0 {
+		return fmt.Errorf("agent: poll_interval must be positive")
+	}
+	if c.RestorePollInterval <= 0 {
+		return fmt.Errorf("agent: restore_poll_interval must be positive")
+	}
 	if c.RequestTimeout <= 0 {
 		return fmt.Errorf("agent: request_timeout must be positive")
 	}
@@ -98,7 +114,10 @@ func Load(path string) (Config, error) {
 	v := viper.New()
 	def := DefaultConfig()
 	v.SetDefault(KeyHeartbeatInterval, def.HeartbeatInterval)
+	v.SetDefault(KeyPollInterval, def.PollInterval)
+	v.SetDefault(KeyRestorePollInterval, def.RestorePollInterval)
 	v.SetDefault(KeyStateFile, def.StateFile)
+	v.SetDefault(KeyWorkDir, def.WorkDir)
 	v.SetDefault(KeyDockerEnabled, def.DockerEnabled)
 	v.SetDefault(KeyDockerHost, def.DockerHost)
 	v.SetDefault(KeyRequestTimeout, def.RequestTimeout)
@@ -140,7 +159,10 @@ func (c Config) Save(path string) error {
 	v.Set(KeyToken, c.Token)
 	v.Set(KeyAgentID, c.AgentID)
 	v.Set(KeyHeartbeatInterval, c.HeartbeatInterval.String())
+	v.Set(KeyPollInterval, c.PollInterval.String())
+	v.Set(KeyRestorePollInterval, c.RestorePollInterval.String())
 	v.Set(KeyStateFile, c.StateFile)
+	v.Set(KeyWorkDir, c.WorkDir)
 	v.Set(KeyDockerEnabled, c.DockerEnabled)
 	v.Set(KeyDockerHost, c.DockerHost)
 	v.Set(KeyRequestTimeout, c.RequestTimeout.String())

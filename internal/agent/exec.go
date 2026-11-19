@@ -5,8 +5,25 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"syscall"
 	"time"
 )
+
+// armGroupKill makes CommandContext cancellation kill the whole process group.
+// Without it, killing only the direct child orphans grandchildren (shell
+// wrappers, tool subprocesses) that keep the stdio pipes open, and cmd.Wait
+// blocks forever waiting for EOF.
+func armGroupKill(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		// Negative pid = process group (the child's own, via Setpgid).
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return cmd.Process.Kill()
+	}
+}
 
 // MaxStderrBytes caps captured stderr so a chatty subprocess cannot exhaust
 // agent memory. The tail is kept: the actionable error is usually last.
@@ -39,6 +56,7 @@ func (e *ExecError) Error() string {
 func RunCommand(ctx context.Context, jobID, stage, name string, args ...string) (stdout []byte, execErr *ExecError) {
 	//nolint:gosec // name/args are caller-provided from validated jobs.
 	cmd := exec.CommandContext(ctx, name, args...)
+	armGroupKill(cmd)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &tailWriter{buf: &errBuf, max: MaxStderrBytes}
