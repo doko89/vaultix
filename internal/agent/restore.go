@@ -84,8 +84,28 @@ func (r *Restorer) Execute(ctx context.Context, job RestoreJob) (string, error) 
 		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
-	keys := make([]string, 0, len(job.Objects))
-	for _, o := range job.Objects {
+	objs := job.Objects
+	if len(wants) > 0 {
+		// Selective restore: the job-manifest metadata object can never
+		// satisfy a user path — drop it before grants/download instead of
+		// failing the restore on it. Full restores still materialize it
+		// (known sidecar; see TECH_DEBT F8).
+		kept := make([]RestoreObject, 0, len(objs))
+		for _, o := range objs {
+			if isManifestObject(o.Key) {
+				continue
+			}
+			kept = append(kept, o)
+		}
+		if len(kept) == 0 {
+			err := fmt.Errorf("agent: restore %s: selective restore (%d path(s)) found no data objects in snapshot", job.ID, len(wants))
+			r.report(ctx, job.ID, "failed", err, nil, nil)
+			return "failed", err
+		}
+		objs = kept
+	}
+	keys := make([]string, 0, len(objs))
+	for _, o := range objs {
 		keys = append(keys, o.Key)
 	}
 	grants, err := r.Manager.DownloadGrants(ctx, job.ID, keys)
@@ -94,8 +114,8 @@ func (r *Restorer) Execute(ctx context.Context, job RestoreJob) (string, error) 
 		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
-	if len(grants.Grants) != len(job.Objects) {
-		err = fmt.Errorf("agent: restore %s: download grants: want %d, got %d", job.ID, len(job.Objects), len(grants.Grants))
+	if len(grants.Grants) != len(objs) {
+		err = fmt.Errorf("agent: restore %s: download grants: want %d, got %d", job.ID, len(objs), len(grants.Grants))
 		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
@@ -106,7 +126,7 @@ func (r *Restorer) Execute(ctx context.Context, job RestoreJob) (string, error) 
 	}
 	defer r.Cleanup(job.ID)
 	matched := make(map[string]bool, len(wants))
-	for i, obj := range job.Objects {
+	for i, obj := range objs {
 		if err := ctx.Err(); err != nil {
 			rerr := fmt.Errorf("agent: restore %s: aborted: %w", job.ID, err)
 			r.report(ctx, job.ID, "failed", rerr, orderedMatched(wants, matched), nil)
@@ -289,6 +309,13 @@ func (p *pipeReader) Read(b []byte) (int, error) { return p.r.Read(b) }
 func (p *pipeReader) Wait() error {
 	_ = p.r.Close()
 	return <-p.errCh
+}
+
+// isManifestObject reports whether key is the job-manifest metadata object:
+// exactly ManifestObjectName or a job-scoped key ending in
+// "/manifest.json" (same rule the manager uses to split completions).
+func isManifestObject(key string) bool {
+	return key == ManifestObjectName || strings.HasSuffix(key, "/"+ManifestObjectName)
 }
 
 func isTarPayload(kind, key string) bool {

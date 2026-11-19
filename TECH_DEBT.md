@@ -44,3 +44,53 @@ coverage is required.
   aligned at `/api/agent/*` (verified: zero `/api/v1` references in the
   agent client); heartbeat, poll, report, grants, and restores reconcile,
   including the completion-manifest shape and restore report states.
+
+---
+
+# Deferred acceptance findings (integrator-4, fix batch, 2026-11-19)
+
+Logged at the fix-batch integration (merges of feat/fix-tls,
+feat/fix-multipart, feat/fix-dbcreds, feat/fix-filerestore). Deferred =
+accepted behavior gap, no fix in this batch. Revisit per item below.
+
+- F4 — In-flight job cancel is serially blocked (deferred 2026-11-19):
+  cancelling a running job waits behind the executor's serial loop, so
+  the cancel acknowledgement lands late for long-running backups. The
+  409 state guard preserves correctness (no double-apply, no lost
+  terminal state), so the gap is latency-only. Revisit when adding
+  cooperative cancel / mid-run checkpointing to the agent executor.
+- F6 — OIDC callback needs `?provider=` hand-embedded (deferred
+  2026-11-19): the callback URL works only when the caller
+  hand-embeds the `?provider=` query param; the RP does not derive or
+  persist the provider across the round-trip on its own. Revisit when
+  hardening OIDC (state/nonce store, multi-provider routing).
+- F7 — Failed success-reports are never retried (deferred 2026-11-19):
+  if the agent's terminal success report POST fails (manager down,
+  network blip), the job stays non-terminal server-side even though
+  the backup bytes are in storage; nothing re-sends the report.
+  Revisit when adding report retry / at-least-once delivery with
+  idempotent completion handling.
+- F8 — Cosmetics (deferred 2026-11-19): (a) doubled `agent:` prefix in
+  some log/error strings; (b) presigned URLs leak into job error
+  text surfaced via the API; (c) a `manifest.json` sidecar lands in
+  the restore destination alongside restored data. All cosmetic /
+  hygiene; (b) has a mild secret-exposure flavor — scrub URLs from
+  errors before any externally-visible deployment.
+- NEW (integrator-4 live finding, 2026-11-19): the backup verify gate
+  does not fall back to the default destination — a policy/job with
+  empty `storage_id` uploads fine (grants resolve the default) but
+  verify-then-complete fails with `head_error (s3: destination id is
+  required)`, so the job can never succeed. Workaround (used by this
+  re-verification): always set `storage_id` explicitly on policies.
+  Fix direction: resolve the default destination in
+  `CompleteJobFlat`/verify like `destinationForJob` already does for
+  grants, or reject empty-`storage_id` policies at the boundary.
+- FIXED live (integrator-4, 2026-11-19, in the `chore: integrator-4
+  merge fallout and tech-debt log` commit): selective restores
+  failed on the `manifest.json` metadata sidecar
+  (`selective restore (N path(s)) needs a file/volume snapshot, got
+  "file"`), because the agent tried to selective-extract it. The
+  agent now drops manifest objects before grants/download when paths
+  are requested (`isManifestObject` in `internal/agent/restore.go`,
+  covered by `TestRestoreExecuteSelectiveSkipsManifestObject`).
+  Full-scope restores still materialize the sidecar (F8c above).

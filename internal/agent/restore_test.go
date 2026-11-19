@@ -575,6 +575,61 @@ func TestRestoreExecuteSelectiveEndToEnd(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dest, "data", "other.txt"))
 }
 
+func TestRestoreExecuteSelectiveSkipsManifestObject(t *testing.T) {
+	// Live shape: the manager dispatches Kind "file" with the data object
+	// plus the manifest.json sidecar. Selective restore must skip the
+	// metadata object (no grant, no download) instead of failing on it.
+	payload := makeTarZst(t, map[string]string{
+		"data/a.txt":     "selected-bytes",
+		"data/other.txt": "not-wanted",
+	})
+	sum := sha256.Sum256(payload)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+	var reported RestoreReportRequest
+	var granted []string
+	stub := &StubManagerClient{}
+	stub.OnDownloadGrants = func(rid string, keys []string) (DownloadGrantsResponse, error) {
+		granted = append(granted, keys...)
+		out := DownloadGrantsResponse{}
+		for _, k := range keys {
+			out.Grants = append(out.Grants, DownloadGrant{Key: k, URL: srv.URL + "/o"})
+		}
+		return out, nil
+	}
+	stub.OnReportRestore = func(rid string, req RestoreReportRequest) error {
+		reported = req
+		return nil
+	}
+	r := &Restorer{Manager: stub, WorkDir: t.TempDir()}
+	dest := t.TempDir()
+	manifestPayload := []byte(`{"objects":[]}`)
+	manifestSum := sha256.Sum256(manifestPayload)
+	state, err := r.Execute(context.Background(), RestoreJob{
+		ID: "r-sel-manifest", SnapshotID: "s-1", Kind: "file",
+		Destination:     RestoreDestination{Mode: "path", Path: dest},
+		OverwritePolicy: "allow",
+		Paths:           []string{"/srv/data/a.txt"},
+		Objects: []RestoreObject{
+			{Key: "jobs/r-sel-manifest/t0-host_filesystem.tar.zst", SizeBytes: int64(len(payload)), SHA256: hex.EncodeToString(sum[:])},
+			{Key: "jobs/r-sel-manifest/manifest.json", SizeBytes: int64(len(manifestPayload)), SHA256: hex.EncodeToString(manifestSum[:])},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", state)
+	assert.Equal(t, "succeeded", reported.State)
+	assert.Equal(t, []string{"/srv/data/a.txt"}, reported.RestoredPaths)
+	assert.Empty(t, reported.MissingPaths)
+	assert.Equal(t, []string{"jobs/r-sel-manifest/t0-host_filesystem.tar.zst"}, granted)
+	got, err := os.ReadFile(filepath.Join(dest, "data", "a.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "selected-bytes", string(got))
+	assert.NoFileExists(t, filepath.Join(dest, "data", "other.txt"))
+	assert.NoFileExists(t, filepath.Join(dest, "manifest.json"))
+}
+
 func TestRestoreExecuteSelectiveMissingFails(t *testing.T) {
 	payload := makeTarZst(t, map[string]string{"data/a.txt": "aaa"})
 	sum := sha256.Sum256(payload)
