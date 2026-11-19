@@ -217,6 +217,11 @@ type multipartInitResponse struct {
 type multipartPartDTO struct {
 	Number int    `json:"number" validate:"min=1,max=10000"`
 	ETag   string `json:"etag" validate:"required,max=256"`
+	// SHA256/SizeBytes carry the agent-observed per-part integrity claim
+	// (bare hex sha256 + exact part length). Shape-checked here; presence
+	// is enforced in the handler with an actionable upgrade message.
+	SHA256    string `json:"sha256" validate:"max=128"`
+	SizeBytes int64  `json:"size_bytes" validate:"gte=0"`
 }
 
 type multipartCompleteRequest struct {

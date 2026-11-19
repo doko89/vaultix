@@ -423,7 +423,7 @@ func (p *agentDataPlane) CompleteMultipartUpload(ctx context.Context, agentID, j
 	}
 	in := make([]ustorage.MultipartPart, 0, len(parts))
 	for _, pt := range parts {
-		in = append(in, ustorage.MultipartPart{PartNumber: pt.PartNumber, ETag: pt.ETag})
+		in = append(in, ustorage.MultipartPart{PartNumber: pt.PartNumber, ETag: pt.ETag, SHA256: pt.SHA256, SizeBytes: pt.SizeBytes})
 	}
 	return p.storage.CompleteJobUpload(ctx, dest.ID, jobID, key, uploadID, in)
 }

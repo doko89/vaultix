@@ -3,10 +3,42 @@ package agents
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/vaultix/vaultix/internal/domain"
 	agentuc "github.com/vaultix/vaultix/internal/usecase/agent"
 )
+
+// checkPartChecksum enforces the multipart integrity contract at the
+// boundary: every part must carry the agent-observed sha256 (64 hex chars)
+// of the exact bytes PUT plus that part's byte length. Pre-checksum agents
+// are rejected with an actionable upgrade message — a multipart object
+// whose parts were never hash-verified must never complete, let alone
+// verify later.
+func checkPartChecksum(number int, sha256Hex string, sizeBytes int64) error {
+	if strings.TrimSpace(sha256Hex) == "" || sizeBytes <= 0 {
+		return fmt.Errorf("%w: part %d: sha256 checksum and size_bytes are required; "+
+			"upgrade the agent to a multipart-checksum release and re-upload",
+			domain.ErrValidation, number)
+	}
+	if len(sha256Hex) != 64 || !isHexDigest(sha256Hex) {
+		return fmt.Errorf("%w: part %d: sha256 must be 64 hex chars",
+			domain.ErrValidation, number)
+	}
+	return nil
+}
+
+// isHexDigest reports whether s is all ASCII hex digits.
+func isHexDigest(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
+			continue
+		}
+		return false
+	}
+	return true
+}
 
 func writeTooLarge(key string) error {
 	return fmt.Errorf("%w: object %q exceeds the size ceiling", domain.ErrValidation, key)
@@ -134,7 +166,11 @@ func (h *handler) handleMultipartComplete(w http.ResponseWriter, r *http.Request
 	}
 	parts := make([]MultipartPart, 0, len(req.Parts))
 	for _, p := range req.Parts {
-		parts = append(parts, MultipartPart{PartNumber: p.Number, ETag: p.ETag})
+		if err := checkPartChecksum(p.Number, p.SHA256, p.SizeBytes); err != nil {
+			h.writeError(w, r, err)
+			return
+		}
+		parts = append(parts, MultipartPart{PartNumber: p.Number, ETag: p.ETag, SHA256: p.SHA256, SizeBytes: p.SizeBytes})
 	}
 	if err := h.grants.CompleteMultipartUpload(r.Context(), cred.AgentID, jobID, req.Key, req.UploadID, parts); err != nil {
 		h.writeError(w, r, err)

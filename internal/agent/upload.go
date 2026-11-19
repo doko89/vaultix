@@ -3,6 +3,8 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -212,11 +214,17 @@ func (u *Uploader) uploadMultipart(ctx context.Context, jobID string, a *Artifac
 		if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
 			return fail(fmt.Errorf("agent: job %s: object %s: read part %d: %w", jobID, a.Name, i+1, rerr))
 		}
+		// Hash the exact bytes about to be PUT: single streaming pass, no
+		// re-reads, one reused part-sized buffer. The completion gate
+		// hash-verifies every part against these claims (multipart ETags
+		// are md5 composites and carry no content hash).
+		sum := sha256.Sum256(buf[:n])
 		etag, err := u.putPart(ctx, init.PartURLs[i], buf[:n])
 		if err != nil {
 			return fail(fmt.Errorf("agent: job %s: object %s: part %d: %w", jobID, a.Name, i+1, err))
 		}
-		parts = append(parts, MultipartPart{Number: i + 1, ETag: etag})
+		parts = append(parts, MultipartPart{Number: i + 1, ETag: etag,
+			SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(n)})
 		if u.OnProgress != nil {
 			u.OnProgress(int64(n))
 		}

@@ -27,6 +27,7 @@ type fakeGrants struct {
 	lastObjs  []UploadObjectRequest
 	lastSize  uint64
 	lastPart  int64
+	lastParts []MultipartPart
 }
 
 func (f *fakeGrants) IssueUploadGrants(_ context.Context, agentID, jobID string, objects []UploadObjectRequest) ([]ObjectGrant, error) {
@@ -45,8 +46,8 @@ func (f *fakeGrants) InitMultipartUpload(_ context.Context, agentID, jobID, _ st
 	return f.key, f.uploadID, f.partURLs, nil
 }
 
-func (f *fakeGrants) CompleteMultipartUpload(_ context.Context, agentID, jobID, _, _ string, _ []MultipartPart) error {
-	f.lastAgent, f.lastJob = agentID, jobID
+func (f *fakeGrants) CompleteMultipartUpload(_ context.Context, agentID, jobID, _, _ string, parts []MultipartPart) error {
+	f.lastAgent, f.lastJob, f.lastParts = agentID, jobID, parts
 	return f.err
 }
 
@@ -338,10 +339,16 @@ func TestMultipartFlow(t *testing.T) {
 		t.Fatalf("small part_size: want 400, got %d", rec.Code)
 	}
 
+	partSHA := strings.Repeat("a", 64)
 	rec = do(t, r.find("POST", "/api/agent/jobs/:id/multipart/complete"), "POST",
-		"/api/agent/jobs/j1/multipart/complete", `{"key":"jobs/j1/big","upload_id":"up-1","parts":[{"number":1,"etag":"e"}]}`, "agent-token")
+		"/api/agent/jobs/j1/multipart/complete", `{"key":"jobs/j1/big","upload_id":"up-1","parts":[{"number":1,"etag":"e","sha256":"`+partSHA+`","size_bytes":100}]}`, "agent-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("complete: want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(grants.lastParts) != 1 || grants.lastParts[0].PartNumber != 1 ||
+		grants.lastParts[0].ETag != "e" || grants.lastParts[0].SHA256 != partSHA ||
+		grants.lastParts[0].SizeBytes != 100 {
+		t.Fatalf("part checksums not passed through: %+v", grants.lastParts)
 	}
 	rec = do(t, r.find("POST", "/api/agent/jobs/:id/multipart/abort"), "POST",
 		"/api/agent/jobs/j1/multipart/abort", `{"key":"jobs/j1/big","upload_id":"up-1"}`, "agent-token")
@@ -353,6 +360,26 @@ func TestMultipartFlow(t *testing.T) {
 		"/api/agent/jobs/j1/multipart/complete", `{"key":"k","upload_id":"u","parts":[{"number":0,"etag":"e"}]}`, "agent-token")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad part: want 400, got %d", rec.Code)
+	}
+	// Pre-checksum agents are rejected with an actionable upgrade message,
+	// never completed silently.
+	for name, body := range map[string]string{
+		"missing sha": `{"key":"k","upload_id":"u","parts":[{"number":1,"etag":"e","size_bytes":10}]}`,
+		"missing len": `{"key":"k","upload_id":"u","parts":[{"number":1,"etag":"e","sha256":"` + partSHA + `"}]}`,
+		"bad sha":     `{"key":"k","upload_id":"u","parts":[{"number":1,"etag":"e","sha256":"zz","size_bytes":10}]}`,
+	} {
+		rec = do(t, r.find("POST", "/api/agent/jobs/:id/multipart/complete"), "POST",
+			"/api/agent/jobs/j1/multipart/complete", body, "agent-token")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: want 400, got %d (%s)", name, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "sha256") {
+			t.Fatalf("%s: 400 must name the missing checksum: %s", name, rec.Body.String())
+		}
+	}
+	if rec := do(t, r.find("POST", "/api/agent/jobs/:id/multipart/complete"), "POST",
+		"/api/agent/jobs/j1/multipart/complete", `{"key":"k","upload_id":"u","parts":[{"number":1,"etag":"e"}]}`, "agent-token"); !strings.Contains(rec.Body.String(), "upgrade the agent") {
+		t.Fatalf("legacy agent 400 must carry the upgrade remedy: %s", rec.Body.String())
 	}
 }
 

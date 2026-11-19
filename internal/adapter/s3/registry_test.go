@@ -83,11 +83,30 @@ func TestRegistryMultipartAndVerify(t *testing.T) {
 	_, err = r.PresignUploadPart(ctx, "dest-1", key, uploadID, 0, time.Minute)
 	require.Error(t, err)
 
+	// Completion carries per-part checksums end to end and stamps the
+	// whole-object sha256, which HEAD then reports like a single-PUT.
+	partBody := []byte("registry-part-bytes")
+	fake.storePart(uploadID, 1, partBody)
+	partSum := sha256.Sum256(partBody)
 	require.NoError(t, r.CompleteMultipartUpload(ctx, "dest-1", key, uploadID,
-		[]ustorage.MultipartPart{{PartNumber: 1, ETag: "e1"}}))
+		[]ustorage.MultipartPart{{
+			PartNumber: 1, ETag: "e1",
+			SHA256:    hex.EncodeToString(partSum[:]),
+			SizeBytes: int64(len(partBody)),
+		}}))
 	u, ok := fake.getUpload(uploadID)
 	require.True(t, ok)
 	assert.True(t, u.completed)
+	meta, err := r.Head(ctx, "dest-1", key)
+	require.NoError(t, err)
+	require.True(t, meta.Exists)
+	assert.Equal(t, "sha256:"+hex.EncodeToString(partSum[:]), meta.Checksum)
+
+	// Parts without checksums are refused, never completed silently.
+	uploadID0, err := r.InitiateMultipartUpload(ctx, "dest-1", key)
+	require.NoError(t, err)
+	require.Error(t, r.CompleteMultipartUpload(ctx, "dest-1", key, uploadID0,
+		[]ustorage.MultipartPart{{PartNumber: 1, ETag: "e1"}}))
 
 	uploadID2, err := r.InitiateMultipartUpload(ctx, "dest-1", key)
 	require.NoError(t, err)

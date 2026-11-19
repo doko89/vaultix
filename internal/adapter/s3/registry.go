@@ -169,7 +169,7 @@ func (r *Registry) CompleteMultipartUpload(ctx context.Context, destinationID, o
 	}
 	converted := make([]CompletedPart, 0, len(parts))
 	for _, p := range parts {
-		converted = append(converted, CompletedPart{PartNumber: p.PartNumber, ETag: p.ETag})
+		converted = append(converted, CompletedPart{PartNumber: p.PartNumber, ETag: p.ETag, SHA256: p.SHA256, SizeBytes: p.SizeBytes})
 	}
 	return c.CompleteMultipartUpload(ctx, objectKey, uploadID, converted)
 }
