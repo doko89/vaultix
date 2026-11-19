@@ -1,0 +1,13 @@
+[Unit]
+Description=Vaultix Agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vaultix-agent run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

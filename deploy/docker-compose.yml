@@ -1,0 +1,11 @@
+# Vaultix local dev stack (stub). Full service definitions are added by the backend team.
+services:
+  # PostgreSQL metadata database (see TECH_SPEC section 3).
+  postgres:
+    image: postgres:16
+    # TODO: ports, volumes, env
+
+  # S3-compatible object storage for local dev (MinIO).
+  minio:
+    image: minio/minio
+    # TODO: ports, volumes, command
