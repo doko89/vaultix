@@ -1,11 +1,48 @@
-import { api } from "@/shared/lib/api";
+import { api, qs } from "@/shared/lib/api";
 import type { ID } from "@/shared/types";
-import type { Agent, DiscoveredResource } from "./types";
+import type {
+  Agent,
+  AgentList,
+  AgentPolicies,
+  AgentResources,
+  EnrollToken,
+} from "./types";
 
-export function listAgents(): Promise<Agent[]> {
-  return api.get<Agent[]>("/agents");
+export interface AgentFilters {
+  status?: string | undefined;
+  q?: string | undefined;
+  limit?: number | undefined;
+  offset?: number | undefined;
 }
 
-export function listAgentResources(agentId: ID): Promise<DiscoveredResource[]> {
-  return api.get<DiscoveredResource[]>(`/agents/${agentId}/resources`);
+export function listAgents(filters: AgentFilters = {}): Promise<AgentList> {
+  return api.get<AgentList>(
+    `/agents${qs({ status: filters.status, q: filters.q, limit: filters.limit, offset: filters.offset })}`,
+  );
+}
+
+export function getAgent(agentId: ID): Promise<Agent> {
+  return api.get<Agent>(`/agents/${encodeURIComponent(agentId)}`);
+}
+
+export function issueEnrollToken(ttlHours?: number): Promise<EnrollToken> {
+  return api.post<EnrollToken>("/agents/enroll-tokens", ttlHours === undefined ? {} : { ttl_hours: ttlHours });
+}
+
+export function setAgentDisabled(agentId: ID, disabled: boolean): Promise<Agent> {
+  return api.patch<Agent>(`/agents/${encodeURIComponent(agentId)}`, { disabled });
+}
+
+export function revokeAgent(agentId: ID): Promise<Agent> {
+  return api.post<Agent>(`/agents/${encodeURIComponent(agentId)}/revoke`);
+}
+
+export function listAgentPolicies(agentId: ID): Promise<AgentPolicies> {
+  return api.get<AgentPolicies>(`/agents/${encodeURIComponent(agentId)}/policies`);
+}
+
+export function listAgentResources(agentId: ID, kind?: string): Promise<AgentResources> {
+  return api.get<AgentResources>(
+    `/agents/${encodeURIComponent(agentId)}/resources${qs({ kind })}`,
+  );
 }
