@@ -607,12 +607,17 @@ func (q *Queries) UpdateIdentityLogin(ctx context.Context, arg UpdateIdentityLog
 	return err
 }
 
+// INTEGRATOR HAND-EDIT (sqlc unavailable in this env): mirrors the
+// db/queries/oidc.sql UpdateProvider change exactly (client_secret_encrypted
+// excluded — the auth track's ProviderSecretStore owns that column).
+// Re-running `sqlc generate` (sqlc v1.27.0, see sqlc.yaml) must produce
+// this same shape.
 const updateProvider = `-- name: UpdateProvider :one
 UPDATE oidc_providers
 SET name = $2, issuer = $3, discovery_url = $4, endpoints = $5,
-    client_id = $6, client_secret_encrypted = $7, scopes = $8,
-    claims_mapping = $9, default_role_id = $10, is_enabled = $11,
-    allow_jit_provisioning = $12, updated_at = now()
+    client_id = $6, scopes = $7,
+    claims_mapping = $8, default_role_id = $9, is_enabled = $10,
+    allow_jit_provisioning = $11, updated_at = now()
 WHERE id = $1
 RETURNING id, name, issuer, discovery_url, endpoints, client_id,
     scopes, claims_mapping, default_role_id, is_enabled,
@@ -620,18 +625,17 @@ RETURNING id, name, issuer, discovery_url, endpoints, client_id,
 `
 
 type UpdateProviderParams struct {
-	ID                    pgtype.UUID `json:"id"`
-	Name                  string      `json:"name"`
-	Issuer                string      `json:"issuer"`
-	DiscoveryUrl          pgtype.Text `json:"discovery_url"`
-	Endpoints             []byte      `json:"endpoints"`
-	ClientID              string      `json:"client_id"`
-	ClientSecretEncrypted pgtype.Text `json:"client_secret_encrypted"`
-	Scopes                string      `json:"scopes"`
-	ClaimsMapping         []byte      `json:"claims_mapping"`
-	DefaultRoleID         pgtype.UUID `json:"default_role_id"`
-	IsEnabled             bool        `json:"is_enabled"`
-	AllowJitProvisioning  bool        `json:"allow_jit_provisioning"`
+	ID                   pgtype.UUID `json:"id"`
+	Name                 string      `json:"name"`
+	Issuer               string      `json:"issuer"`
+	DiscoveryUrl         pgtype.Text `json:"discovery_url"`
+	Endpoints            []byte      `json:"endpoints"`
+	ClientID             string      `json:"client_id"`
+	Scopes               string      `json:"scopes"`
+	ClaimsMapping        []byte      `json:"claims_mapping"`
+	DefaultRoleID        pgtype.UUID `json:"default_role_id"`
+	IsEnabled            bool        `json:"is_enabled"`
+	AllowJitProvisioning bool        `json:"allow_jit_provisioning"`
 }
 
 type UpdateProviderRow struct {
@@ -658,7 +662,6 @@ func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) 
 		arg.DiscoveryUrl,
 		arg.Endpoints,
 		arg.ClientID,
-		arg.ClientSecretEncrypted,
 		arg.Scopes,
 		arg.ClaimsMapping,
 		arg.DefaultRoleID,

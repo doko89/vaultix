@@ -130,15 +130,15 @@ func (s *stubPolicyService) RemoveTarget(_ context.Context, policyID, tid string
 }
 
 type stubScheduleService struct {
-	t           *testing.T
-	onCreate    func(scheduleuc.CreateInput) (*domain.Schedule, error)
-	onGet       func(id string) (*domain.Schedule, error)
-	onList      func(policyID string) ([]domain.Schedule, error)
-	onUpdate    func(id string, in scheduleuc.UpdateInput) (*domain.Schedule, error)
-	onDelete    func(id string) error
-	onPause     func(id string) (*domain.Schedule, error)
-	onResume    func(id string) (*domain.Schedule, error)
-	onTrigger   func(scheduleuc.ManualTrigger) ([]*domain.BackupJob, error)
+	t         *testing.T
+	onCreate  func(scheduleuc.CreateInput) (*domain.Schedule, error)
+	onGet     func(id string) (*domain.Schedule, error)
+	onList    func(policyID string) ([]domain.Schedule, error)
+	onUpdate  func(id string, in scheduleuc.UpdateInput) (*domain.Schedule, error)
+	onDelete  func(id string) error
+	onPause   func(id string) (*domain.Schedule, error)
+	onResume  func(id string) (*domain.Schedule, error)
+	onTrigger func(scheduleuc.ManualTrigger) ([]*domain.BackupJob, error)
 }
 
 func (s *stubScheduleService) fail(op string) {

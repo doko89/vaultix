@@ -1,6 +1,11 @@
 -- OIDC providers + external identities (PRD §7.1.1).
 -- NOTE: never select client_secret_encrypted in read APIs; the
 -- GetProviderSecret query exists only for the server-side token exchange.
+-- Column ownership: client_secret_encrypted holds the auth track's Box
+-- envelope, written only through auth.ProviderSecretStore. Provider
+-- create/update statements must NEVER write it (the secret reference
+-- lives in endpoints JSON); UpdateProvider excludes it so config edits
+-- cannot clobber a stored secret.
 
 -- name: GetProviderByID :one
 SELECT id, name, issuer, discovery_url, endpoints, client_id,
@@ -75,9 +80,9 @@ FROM oidc_providers WHERE issuer = $1;
 -- name: UpdateProvider :one
 UPDATE oidc_providers
 SET name = $2, issuer = $3, discovery_url = $4, endpoints = $5,
-    client_id = $6, client_secret_encrypted = $7, scopes = $8,
-    claims_mapping = $9, default_role_id = $10, is_enabled = $11,
-    allow_jit_provisioning = $12, updated_at = now()
+    client_id = $6, scopes = $7,
+    claims_mapping = $8, default_role_id = $9, is_enabled = $10,
+    allow_jit_provisioning = $11, updated_at = now()
 WHERE id = $1
 RETURNING id, name, issuer, discovery_url, endpoints, client_id,
     scopes, claims_mapping, default_role_id, is_enabled,

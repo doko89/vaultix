@@ -3,15 +3,18 @@ package http
 import (
 	"log/slog"
 	nethttp "net/http"
+	"net/http/httptest"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/vaultix/vaultix/internal/adapter/http/middleware"
 )
 
 // Router is the chi-compatible routing subset slices Mount onto. *Mux
-// implements it today; *chi.Mux satisfies the identical method set, so
-// slices Mount unchanged after integrator-2 swaps router internals to chi.
+// implements it, and *Mux also satisfies chi.Router itself, so slices
+// Mount unchanged whether they need the subset or full chi.
 type Router interface {
 	Get(pattern string, h nethttp.HandlerFunc)
 	Post(pattern string, h nethttp.HandlerFunc)
@@ -21,35 +24,42 @@ type Router interface {
 }
 
 // RouterDeps wires NewRouter. Health.DB is required; Metrics may be nil (a
-// default registry is built); SPA follows spa.go semantics.
+// default registry is built); SPA follows spa.go semantics; Slices mounts
+// the seven slice packages (zero value mounts none).
 type RouterDeps struct {
 	Health         HealthDeps
 	Metrics        *Metrics
 	SPA            SPAConfig
 	RequestTimeout time.Duration
 	Logger         *slog.Logger
+	// CSRFCookie names the session cookie the CSRF middleware guards;
+	// empty selects the default session cookie name.
+	CSRFCookie string
+	Slices     SliceDeps
 }
 
-// Mux is the Manager root router: stdlib-mux-backed, chi-pattern-compatible,
-// served behind the request-ID/logging/recovery/timeout middleware chain.
-// It serves /healthz and /metrics, routes /api/* to slices (JSON 404 when
+// Mux is the Manager root router: chi-backed, served behind the
+// request-ID/logging/CSRF/recovery/timeout middleware chain. It serves
+// /healthz and /metrics, routes /api/* to slices (JSON 404 when
 // unmatched), and falls back to the SPA for everything else.
 type Mux struct {
-	mux     *nethttp.ServeMux
+	*chi.Mux
 	handler nethttp.Handler
 	metrics *Metrics
 	spa     *spaHandler
 	log     *slog.Logger
 }
 
-// Compile-time proof that Mux is a slice-mountable router and an http handler.
+// Compile-time proof that Mux is a slice-mountable router, a full chi
+// router (the jobs slice needs Route), and an http handler.
 var (
 	_ Router          = (*Mux)(nil)
+	_ chi.Router      = (*Mux)(nil)
 	_ nethttp.Handler = (*Mux)(nil)
 )
 
-// NewRouter assembles the root router with middleware, health, metrics, and
-// the SPA fallback. Slice mounts live in mountSlices below.
+// NewRouter assembles the root router with middleware, health, metrics,
+// slice mounts, and the SPA fallback.
 func NewRouter(deps RouterDeps) *Mux {
 	log := deps.Logger
 	if log == nil {
@@ -60,7 +70,7 @@ func NewRouter(deps RouterDeps) *Mux {
 		metrics = NewMetrics(deps.Health.Version, log)
 	}
 	m := &Mux{
-		mux:     nethttp.NewServeMux(),
+		Mux:     chi.NewRouter(),
 		metrics: metrics,
 		spa:     newSPAHandler(deps.SPA, log),
 		log:     log,
@@ -73,40 +83,24 @@ func NewRouter(deps RouterDeps) *Mux {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = w.Write([]byte(metrics.Exposition()))
 	})
+	m.Mux.NotFound(m.notFound)
+	m.Mux.MethodNotAllowed(m.methodNotAllowed)
 
-	m.mountSlices()
+	m.mountSlices(deps.Slices)
 
 	// Chain order mirrors chi's conventional stack: request ID, access log,
-	// panic recovery, then the request timeout around dispatch. Metrics
+	// CSRF (cookie-aware; token-authed calls pass through), panic
+	// recovery, then the request timeout around dispatch. Metrics
 	// observation wraps dispatch last so it sees the final status.
-	var h nethttp.Handler = nethttp.HandlerFunc(m.dispatch)
+	var h nethttp.Handler = m.Mux
 	h = m.observe(h)
 	h = middleware.Timeout(deps.RequestTimeout)(h)
 	h = middleware.Recovery(log)(h)
+	h = middleware.CSRF(deps.CSRFCookie)(h)
 	h = middleware.Logging(log)(h)
 	h = middleware.RequestID(h)
 	m.handler = h
 	return m
-}
-
-// mountSlices registers the seven slice packages.
-//
-// TODO(integrator-2): uncomment each Mount once the slice packages land in
-// the merged tree and their Deps are wired in cmd/manager serve.go:
-//
-//	auth.Mount(m, auth.Deps{...})             // local users, sessions, OIDC login
-//	agents.Mount(m, agents.Deps{...})         // agent UI + /api/agent/* protocol
-//	policies.Mount(m, policies.Deps{...})     // policies + schedules
-//	jobs.Mount(chiRouter, jobs.Deps{...})     // NOTE: jobs.Mount takes chi.Router and uses Route() —
-//	                                          // needs real chi; swap Mux internals first (see doc.go)
-//	restore.Mount(m, restore.Deps{...})       // snapshot catalog + restore jobs
-//	storage.Mount(m, storage.Deps{...})       // destinations + secret profiles
-//	platform.Mount(m, platform.Deps{...})     // dashboard, notifications, audit, settings (this track)
-//
-// Only jobs.Mount needs chi; every other slice defines the same Router
-// subset *Mux already satisfies, so those calls compile unchanged.
-func (m *Mux) mountSlices() {
-	// No slices in this worktree by design (parallel tracks own them).
 }
 
 // ServeHTTP serves requests through the middleware chain.
@@ -114,21 +108,9 @@ func (m *Mux) ServeHTTP(w nethttp.ResponseWriter, r *nethttp.Request) {
 	m.handler.ServeHTTP(w, r)
 }
 
-// dispatch routes: exact mux matches serve; path-known-but-wrong-method
-// gets a JSON 405; unmatched /api/* gets a JSON 404; everything else falls
-// back to the SPA.
-func (m *Mux) dispatch(w nethttp.ResponseWriter, r *nethttp.Request) {
-	_, pattern := m.mux.Handler(r)
-	if pattern != "" {
-		// Re-serve through the mux (rather than calling h directly) so
-		// path values are populated on the request.
-		m.mux.ServeHTTP(w, r)
-		return
-	}
-	if m.methodMismatch(r) {
-		WriteError(w, r, nethttp.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
+// notFound answers unmatched routes: JSON 404 for /api/*, SPA fallback
+// otherwise.
+func (m *Mux) notFound(w nethttp.ResponseWriter, r *nethttp.Request) {
 	if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 		WriteError(w, r, nethttp.StatusNotFound, "not found")
 		return
@@ -136,25 +118,9 @@ func (m *Mux) dispatch(w nethttp.ResponseWriter, r *nethttp.Request) {
 	m.spa.ServeHTTP(w, r)
 }
 
-// methodMismatch reports whether the request path is registered under a
-// different method. The stdlib mux folds method mismatches into empty-pattern
-// misses, so unmatched requests probe the other methods (misses are rare;
-// the extra lookups are cheap).
-func (m *Mux) methodMismatch(r *nethttp.Request) bool {
-	for _, method := range []string{
-		nethttp.MethodGet, nethttp.MethodPost, nethttp.MethodPut,
-		nethttp.MethodPatch, nethttp.MethodDelete,
-	} {
-		if method == r.Method {
-			continue
-		}
-		probe := r.Clone(r.Context())
-		probe.Method = method
-		if _, pattern := m.mux.Handler(probe); pattern != "" {
-			return true
-		}
-	}
-	return false
+// methodNotAllowed answers path-known-but-wrong-method with a JSON 405.
+func (m *Mux) methodNotAllowed(w nethttp.ResponseWriter, r *nethttp.Request) {
+	WriteError(w, r, nethttp.StatusMethodNotAllowed, "method not allowed")
 }
 
 func (m *Mux) observe(next nethttp.Handler) nethttp.Handler {
@@ -175,24 +141,66 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-// ---- Router implementation (chi-pattern-compatible) ----
+// ---- Router implementation (chi-native patterns) ----
 
-func (m *Mux) Get(pattern string, h nethttp.HandlerFunc)    { m.handle("GET", pattern, h) }
-func (m *Mux) Post(pattern string, h nethttp.HandlerFunc)   { m.handle("POST", pattern, h) }
-func (m *Mux) Put(pattern string, h nethttp.HandlerFunc)    { m.handle("PUT", pattern, h) }
-func (m *Mux) Patch(pattern string, h nethttp.HandlerFunc)  { m.handle("PATCH", pattern, h) }
-func (m *Mux) Delete(pattern string, h nethttp.HandlerFunc) { m.handle("DELETE", pattern, h) }
-
-func (m *Mux) handle(method, pattern string, h nethttp.HandlerFunc) {
-	m.mux.HandleFunc(method+" "+translatePattern(pattern), h)
+// Get registers a GET route, translating ":id" segments to chi "{id}"
+// (chi has no colon syntax) and bridging chi path params into the
+// request's stdlib path values so handlers work identically under chi
+// helpers and r.PathValue. Post/Put/Patch/Delete behave the same.
+func (m *Mux) Get(pattern string, h nethttp.HandlerFunc) {
+	m.Mux.Get(chiPattern(pattern), m.bridge(h))
 }
 
-// translatePattern converts chi-style patterns to stdlib ServeMux patterns:
-// ":id" segments become "{id}" (existing "{id}" segments pass through), and
-// a trailing "/*" becomes the stdlib "{_rest...}" wildcard. Slices must parse
-// path IDs from r.URL.Path directly (never via router helpers) so handlers
-// work under both this Mux and chi — the agents track already follows this
-// rule.
+func (m *Mux) Post(pattern string, h nethttp.HandlerFunc) {
+	m.Mux.Post(chiPattern(pattern), m.bridge(h))
+}
+
+func (m *Mux) Put(pattern string, h nethttp.HandlerFunc) {
+	m.Mux.Put(chiPattern(pattern), m.bridge(h))
+}
+
+func (m *Mux) Patch(pattern string, h nethttp.HandlerFunc) {
+	m.Mux.Patch(chiPattern(pattern), m.bridge(h))
+}
+
+func (m *Mux) Delete(pattern string, h nethttp.HandlerFunc) {
+	m.Mux.Delete(chiPattern(pattern), m.bridge(h))
+}
+
+// chiPattern rewrites ":name" segments to "{name}"; "{name}", "*", and
+// static segments pass through untouched.
+func chiPattern(pattern string) string {
+	if pattern == "" || !strings.Contains(pattern, ":") {
+		return pattern
+	}
+	segs := strings.Split(pattern, "/")
+	for i, s := range segs {
+		if strings.HasPrefix(s, ":") && len(s) > 1 {
+			segs[i] = "{" + s[1:] + "}"
+		}
+	}
+	return strings.Join(segs, "/")
+}
+
+// bridge copies chi URL params into stdlib path values before invoking h.
+func (m *Mux) bridge(h nethttp.HandlerFunc) nethttp.HandlerFunc {
+	return func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		if rctx := chi.RouteContext(r.Context()); rctx != nil {
+			for i, k := range rctx.URLParams.Keys {
+				if k == "*" || i >= len(rctx.URLParams.Values) {
+					continue
+				}
+				r.SetPathValue(k, rctx.URLParams.Values[i])
+			}
+		}
+		h(w, r)
+	}
+}
+
+// translatePattern converts chi-style ":id" patterns to stdlib ServeMux
+// "{id}" patterns (existing "{id}" segments pass through; trailing "/*"
+// becomes "{_rest...}"). It documents the pre-chi translation and stays
+// covered by TestTranslatePattern; chi serves ":id" natively now.
 func translatePattern(pattern string) string {
 	if pattern == "" {
 		return pattern
@@ -212,4 +220,31 @@ func translatePattern(pattern string) string {
 		out = "/" + out
 	}
 	return out + trailing
+}
+
+// relayNormalized serves the policies stdlib mux while keeping error
+// shapes consistent with the chi root: the mux's plain-text 404/405
+// defaults become the JSON envelope; JSON bodies pass through untouched.
+func relayNormalized(pmux *nethttp.ServeMux) nethttp.HandlerFunc {
+	return func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		rec := httptest.NewRecorder()
+		pmux.ServeHTTP(rec, r)
+		if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+			switch rec.Code {
+			case nethttp.StatusNotFound:
+				WriteError(w, r, nethttp.StatusNotFound, "not found")
+				return
+			case nethttp.StatusMethodNotAllowed:
+				WriteError(w, r, nethttp.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+		}
+		for k, vs := range rec.Header() {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+	}
 }

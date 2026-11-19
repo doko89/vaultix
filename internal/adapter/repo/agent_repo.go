@@ -173,18 +173,16 @@ func (r *AgentRepo) ListAgents(ctx context.Context, opts domain.ListOptions) (do
 }
 
 // StoreCredential persists an agent credential hash. AgentID is required
-// (see mapping notes); only the hash is stored, never plaintext.
+// except for unclaimed enrollment tokens (empty AgentID maps to NULL;
+// see migration 00011); only the hash is stored, never plaintext.
 func (r *AgentRepo) StoreCredential(ctx context.Context, c *domain.AgentCredential) error {
 	if c == nil {
 		return validationError("credential is required")
 	}
-	if c.AgentID == "" {
-		return validationError("credential agent_id is required")
-	}
 	if c.TokenHash == "" {
 		return validationError("credential hash is required")
 	}
-	aid, err := mustParseUUID(c.AgentID, "agent id")
+	aid, err := mustOptUUID(c.AgentID, "agent id")
 	if err != nil {
 		return err
 	}

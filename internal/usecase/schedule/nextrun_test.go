@@ -188,7 +188,7 @@ func TestParseCron(t *testing.T) {
 		"0 9 * * mon",
 		"0 0 1 jan *",
 		"30 4 1-15/2 * sun,sat",
-		"0 0 * * 7", // 7 = Sunday
+		"0 0 * * 7",     // 7 = Sunday
 		"  0 2 * * *  ", // surrounding whitespace tolerated
 	}
 	for _, e := range valid {

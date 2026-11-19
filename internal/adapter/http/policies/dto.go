@@ -87,8 +87,8 @@ type policyRequest struct {
 	Description string          `json:"description"`
 	AgentIDs    []string        `json:"agent_ids" validate:"required,min=1"`
 	StorageID   string          `json:"storage_id"`
-	Compression compressionDTO `json:"compression"`
-	Encryption  encryptionDTO  `json:"encryption"`
+	Compression compressionDTO  `json:"compression"`
+	Encryption  encryptionDTO   `json:"encryption"`
 	Retention   *retentionDTO   `json:"retention" validate:"required"`
 	Targets     []targetRequest `json:"targets" validate:"required,min=1,dive"`
 	Note        string          `json:"note"`
@@ -144,8 +144,8 @@ func targetInputs(ts []targetRequest) []policyuc.TargetInput {
 // publishRequest replaces the frozen config (→ new version).
 type publishRequest struct {
 	Targets     []targetRequest `json:"targets" validate:"required,min=1,dive"`
-	Compression compressionDTO `json:"compression"`
-	Encryption  encryptionDTO  `json:"encryption"`
+	Compression compressionDTO  `json:"compression"`
+	Encryption  encryptionDTO   `json:"encryption"`
 	Retention   *retentionDTO   `json:"retention" validate:"required"`
 	StorageID   string          `json:"storage_id"`
 	Note        string          `json:"note"`
@@ -216,13 +216,13 @@ func targetFromDomain(t domain.BackupPolicyTarget) targetDTO {
 }
 
 type versionDTO struct {
-	Version     int           `json:"version"`
-	PolicyID    string        `json:"policy_id"`
-	CreatedBy   string        `json:"created_by"`
-	CreatedAt   time.Time     `json:"created_at"`
-	Targets     []targetDTO   `json:"targets"`
-	Schedule    *scheduleDTO  `json:"schedule,omitempty"`
-	Retention   retentionDTO  `json:"retention"`
+	Version     int            `json:"version"`
+	PolicyID    string         `json:"policy_id"`
+	CreatedBy   string         `json:"created_by"`
+	CreatedAt   time.Time      `json:"created_at"`
+	Targets     []targetDTO    `json:"targets"`
+	Schedule    *scheduleDTO   `json:"schedule,omitempty"`
+	Retention   retentionDTO   `json:"retention"`
 	Compression compressionDTO `json:"compression"`
 	Encryption  encryptionDTO  `json:"encryption"`
 	StorageID   string         `json:"storage_id"`
@@ -237,10 +237,10 @@ func versionFromDomain(v *domain.BackupPolicyVersion) versionDTO {
 	out := versionDTO{
 		Version: v.Version, PolicyID: v.PolicyID, CreatedBy: v.CreatedBy,
 		CreatedAt: v.CreatedAt, Targets: targets,
-		Retention: retentionFromDomain(v.Retention),
+		Retention:   retentionFromDomain(v.Retention),
 		Compression: compressionFromDomain(v.Compression),
-		Encryption: encryptionFromDomain(v.Encryption),
-		StorageID: v.StorageID, Note: v.Note,
+		Encryption:  encryptionFromDomain(v.Encryption),
+		StorageID:   v.StorageID, Note: v.Note,
 	}
 	if v.Schedule.Kind != "" {
 		s := scheduleFromDomain(&v.Schedule)
@@ -400,14 +400,14 @@ type runRequest struct {
 }
 
 type jobDTO struct {
-	ID            string  `json:"id"`
-	AgentID       string  `json:"agent_id"`
-	PolicyID      string  `json:"policy_id"`
-	PolicyVersion int     `json:"policy_version"`
-	ScheduleID    string  `json:"schedule_id"`
-	Trigger       string  `json:"trigger"`
-	State         string  `json:"state"`
-	CreatedBy     string  `json:"created_by"`
+	ID            string    `json:"id"`
+	AgentID       string    `json:"agent_id"`
+	PolicyID      string    `json:"policy_id"`
+	PolicyVersion int       `json:"policy_version"`
+	ScheduleID    string    `json:"schedule_id"`
+	Trigger       string    `json:"trigger"`
+	State         string    `json:"state"`
+	CreatedBy     string    `json:"created_by"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 

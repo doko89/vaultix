@@ -52,6 +52,13 @@ type Config struct {
 	RequestTimeoutSecs   int    `mapstructure:"request_timeout_seconds"`
 	ShutdownTimeoutSecs  int    `mapstructure:"shutdown_timeout_seconds"`
 	HeartbeatTimeoutSecs int    `mapstructure:"heartbeat_timeout_seconds"`
+	// OIDCRedirectURL is the absolute IdP callback URL (empty disables
+	// OIDC login starts at runtime).
+	OIDCRedirectURL string `mapstructure:"oidc_redirect_url"`
+	// DispatchIntervalSecs ticks schedule dispatch + notification drain.
+	DispatchIntervalSecs int `mapstructure:"dispatch_interval_seconds"`
+	// JanitorIntervalSecs ticks expired-session cleanup.
+	JanitorIntervalSecs int `mapstructure:"janitor_interval_seconds"`
 
 	S3   S3Config   `mapstructure:"s3"`
 	SMTP SMTPConfig `mapstructure:"smtp"`
@@ -71,6 +78,22 @@ func (c Config) ShutdownTimeout() time.Duration {
 		return 15 * time.Second
 	}
 	return time.Duration(c.ShutdownTimeoutSecs) * time.Second
+}
+
+// DispatchInterval returns the schedule-dispatch tick.
+func (c Config) DispatchInterval() time.Duration {
+	if c.DispatchIntervalSecs <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(c.DispatchIntervalSecs) * time.Second
+}
+
+// JanitorInterval returns the session-cleanup tick.
+func (c Config) JanitorInterval() time.Duration {
+	if c.JanitorIntervalSecs <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(c.JanitorIntervalSecs) * time.Second
 }
 
 // Validate checks required fields.
@@ -179,6 +202,8 @@ func loadConfig(configPath string) (Config, error) {
 	viper.SetDefault("request_timeout_seconds", 30)
 	viper.SetDefault("shutdown_timeout_seconds", 15)
 	viper.SetDefault("heartbeat_timeout_seconds", 300)
+	viper.SetDefault("dispatch_interval_seconds", 30)
+	viper.SetDefault("janitor_interval_seconds", 300)
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {

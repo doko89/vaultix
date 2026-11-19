@@ -16,9 +16,10 @@ import (
 // Mapping notes: endpoint overrides live in the endpoints JSON object;
 // group claim names and the group->role map live in claims_mapping;
 // DefaultRole (a role name) resolves to default_role_id on write and back
-// on read. ClientSecretRef is stored in client_secret_encrypted and
-// duplicated into endpoints JSON so secret-redacting reads (which never
-// select the secret column) still return the reference.
+// on read. ClientSecretRef lives in endpoints JSON only: reads never
+// select the secret column, and writes never touch it —
+// client_secret_encrypted holds the auth track's Box envelope, owned
+// exclusively by auth.ProviderSecretStore (see db/queries/oidc.sql).
 type OIDCRepo struct {
 	baseRepo
 }
@@ -63,12 +64,14 @@ func (r *OIDCRepo) CreateProvider(ctx context.Context, p *domain.OIDCProvider) e
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 	row, err := r.q.CreateProvider(ctx, gen.CreateProviderParams{
-		Name:                  p.Name,
-		Issuer:                p.Issuer,
-		DiscoveryUrl:          textOrNull(p.DiscoveryURL),
-		Endpoints:             endpoints,
-		ClientID:              p.ClientID,
-		ClientSecretEncrypted: textOrNull(p.ClientSecretRef),
+		Name:         p.Name,
+		Issuer:       p.Issuer,
+		DiscoveryUrl: textOrNull(p.DiscoveryURL),
+		Endpoints:    endpoints,
+		ClientID:     p.ClientID,
+		// NULL: the secret envelope arrives later through
+		// auth.ProviderSecretStore; the reference rides in endpoints JSON.
+		ClientSecretEncrypted: textOrNull(""),
 		Scopes:                oidcScopesString(p.Scopes),
 		ClaimsMapping:         mapping,
 		DefaultRoleID:         defaultRoleID,
@@ -152,18 +155,17 @@ func (r *OIDCRepo) UpdateProvider(ctx context.Context, p *domain.OIDCProvider) e
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 	_, err = r.q.UpdateProvider(ctx, gen.UpdateProviderParams{
-		ID:                    pid,
-		Name:                  p.Name,
-		Issuer:                p.Issuer,
-		DiscoveryUrl:          textOrNull(p.DiscoveryURL),
-		Endpoints:             endpoints,
-		ClientID:              p.ClientID,
-		ClientSecretEncrypted: textOrNull(p.ClientSecretRef),
-		Scopes:                oidcScopesString(p.Scopes),
-		ClaimsMapping:         mapping,
-		DefaultRoleID:         defaultRoleID,
-		IsEnabled:             p.Enabled,
-		AllowJitProvisioning:  p.JITProvisioning,
+		ID:                   pid,
+		Name:                 p.Name,
+		Issuer:               p.Issuer,
+		DiscoveryUrl:         textOrNull(p.DiscoveryURL),
+		Endpoints:            endpoints,
+		ClientID:             p.ClientID,
+		Scopes:               oidcScopesString(p.Scopes),
+		ClaimsMapping:        mapping,
+		DefaultRoleID:        defaultRoleID,
+		IsEnabled:            p.Enabled,
+		AllowJitProvisioning: p.JITProvisioning,
 	})
 	if err != nil {
 		return mapErr(err)

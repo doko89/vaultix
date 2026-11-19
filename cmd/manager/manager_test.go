@@ -288,7 +288,9 @@ func TestRunnerRollsBackFailedMigration(t *testing.T) {
 func TestCollectRealMigrations(t *testing.T) {
 	migrations, err := Runner{}.Collect("../../db/migrations")
 	require.NoError(t, err)
-	require.Len(t, migrations, 9, "base schema has 9 migrations")
+	// Phase 2 merge: the auth track adds 00010_sessions.sql on top of the
+	// base 9, and integration adds 00011 (nullable credential agent_id).
+	require.Len(t, migrations, 11, "base schema has 11 migrations")
 	for i, m := range migrations {
 		assert.Equal(t, int64(i+1), m.Version)
 		assert.NotEmpty(t, m.Up, "migration %d needs Up statements", m.Version)

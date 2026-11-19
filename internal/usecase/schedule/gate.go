@@ -44,7 +44,7 @@ type Fire struct {
 	// Schedule is the frozen firing definition. The jobs track MUST record
 	// it on each created job (PRD §7.9: record the schedule definition
 	// used for each job).
-	Schedule domain.Schedule
+	Schedule      domain.Schedule
 	PolicyID      string
 	PolicyVersion int // pinned immutable version
 	AgentIDs      []string
@@ -63,8 +63,8 @@ type ConcurrencyGate interface {
 
 // Counts is a point-in-time load snapshot.
 type Counts struct {
-	Global   int
-	PerAgent map[string]int
+	Global    int
+	PerAgent  map[string]int
 	PerPolicy map[string]int // active jobs per policy = per protected resource
 }
 

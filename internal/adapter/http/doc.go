@@ -3,10 +3,9 @@
 //
 // Router compatibility: slices expose Mount(r <subset>, deps) where <subset>
 // is a chi-compatible interface (Get/Post/Put/Patch/Delete) each slice
-// defines — see the agents track's Router. This package's Mux implements
-// that method set over the stdlib mux, translating chi ":id" patterns to
-// stdlib "{id}" patterns, so slices Mount unchanged both today and after
-// integrator-2 swaps Mux internals to *chi.Mux. The one exception is the
-// jobs slice, whose Mount takes chi.Router and uses Route(): it needs real
-// chi at integration (TODO(integrator-2)).
+// defines — see the agents track's Router. This package's Mux embeds
+// *chi.Mux and satisfies both that method set and chi.Router itself, so
+// every slice (including jobs, which needs Route) Mounts directly. The one
+// exception is policies, which mounts its stdlib mux under /api/policies
+// and /api/schedules (see mountPolicies).
 package http

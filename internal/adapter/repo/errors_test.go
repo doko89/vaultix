@@ -50,7 +50,11 @@ func TestRepoValidationWithoutDB(t *testing.T) {
 		"GetAgent/bad":              func() error { _, err := repos.Agents.GetAgent(ctx, badID); return err },
 		"UpdateAgent/nil":           func() error { return repos.Agents.UpdateAgent(ctx, nil) },
 		"StoreCredential/nil":       func() error { return repos.Agents.StoreCredential(ctx, nil) },
-		"StoreCredential/no-agent":  func() error { return repos.Agents.StoreCredential(ctx, &domain.AgentCredential{TokenHash: "h"}) },
+		// Empty AgentID is valid (unclaimed enrollment token → NULL);
+		// malformed IDs still fail before any DB call.
+		"StoreCredential/bad-agent": func() error {
+			return repos.Agents.StoreCredential(ctx, &domain.AgentCredential{AgentID: badID, TokenHash: "h"})
+		},
 		"StoreCredential/no-hash": func() error {
 			return repos.Agents.StoreCredential(ctx, &domain.AgentCredential{AgentID: "6e4a83b0-1e2d-4c3b-8a5f-9d0c1b2a3944"})
 		},

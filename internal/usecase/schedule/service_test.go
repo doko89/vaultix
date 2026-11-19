@@ -491,8 +491,8 @@ func TestDispatchSkipsAndFailures(t *testing.T) {
 		fs.items[id] = &domain.Schedule{ID: id, PolicyID: pol, Kind: domain.ScheduleHourly,
 			IntervalHours: 1, Timezone: "UTC", MaxConcurrency: 1, NextRunAt: &past, Paused: paused}
 	}
-	mk("sch_busy", "pol_1", false)   // denied by gate (overlap)
-	mk("sch_paused", "pol_1", true)   // inactive: DueSchedules filters, assert defensively
+	mk("sch_busy", "pol_1", false)       // denied by gate (overlap)
+	mk("sch_paused", "pol_1", true)      // inactive: DueSchedules filters, assert defensively
 	mk("sch_disabled", "pol_off", false) // policy disabled
 	fp := &fakePolicies{items: map[string]*domain.BackupPolicy{
 		"pol_1":   {ID: "pol_1", AgentIDs: []string{"ag_1"}, Enabled: true, CurrentVersion: 1},
