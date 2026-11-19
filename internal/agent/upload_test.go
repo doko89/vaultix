@@ -3,6 +3,8 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -174,7 +176,8 @@ func TestUploadMultipartFlow(t *testing.T) {
 	}
 	up := &Uploader{Manager: stub, NewBackOff: fastBackoff}
 	// Small staged file → single part through the multipart path.
-	key, err := up.uploadMultipart(context.Background(), "job-9", stageFile(t, "big", bytes.Repeat([]byte("z"), 1000)))
+	body := bytes.Repeat([]byte("z"), 1000)
+	key, err := up.uploadMultipart(context.Background(), "job-9", stageFile(t, "big", body))
 	require.NoError(t, err)
 	assert.Equal(t, "tenant/jobs/job-9/big", key)
 	assert.True(t, completed)
@@ -182,6 +185,45 @@ func TestUploadMultipartFlow(t *testing.T) {
 	assert.Equal(t, 1, gotParts[0].Number)
 	assert.NotEmpty(t, gotParts[0].ETag)
 	assert.Len(t, f.store["/mp/p1"], 1000)
+	// The completion call carries the part's content hash + length, which
+	// the manager gate verifies (ETags alone are md5 composites).
+	sum := sha256.Sum256(body)
+	assert.Equal(t, hex.EncodeToString(sum[:]), gotParts[0].SHA256)
+	assert.Equal(t, int64(len(body)), gotParts[0].SizeBytes)
+}
+
+func TestUploadMultipartSendsChecksumsPerPart(t *testing.T) {
+	f, srv := newFakeGrantServer(t, 0)
+	stub := &StubManagerClient{}
+	var gotParts []MultipartPart
+	stub.OnMultipartInit = func(jobID string, req MultipartInitRequest) (MultipartInitResponse, error) {
+		return MultipartInitResponse{
+			UploadID: "u-multi", Key: "tenant/jobs/job-9/big",
+			PartURLs: []string{srv.URL + "/mp/p1", srv.URL + "/mp/p2"},
+		}, nil
+	}
+	stub.OnMultipartDone = func(jobID string, req MultipartCompleteRequest) error {
+		gotParts = req.Parts
+		return nil
+	}
+	up := &Uploader{Manager: stub, NewBackOff: fastBackoff}
+	// Just over one part: exercises a full part plus a short tail.
+	first := bytes.Repeat([]byte("a"), MultipartPartSize)
+	tail := bytes.Repeat([]byte("b"), 100)
+	body := append(append([]byte(nil), first...), tail...)
+	key, err := up.uploadMultipart(context.Background(), "job-9", stageFile(t, "big", body))
+	require.NoError(t, err)
+	assert.Equal(t, "tenant/jobs/job-9/big", key)
+	require.Len(t, gotParts, 2)
+	for i, want := range [][]byte{first, tail} {
+		sum := sha256.Sum256(want)
+		assert.Equal(t, i+1, gotParts[i].Number)
+		assert.NotEmpty(t, gotParts[i].ETag)
+		assert.Equal(t, hex.EncodeToString(sum[:]), gotParts[i].SHA256, "part %d hash", i+1)
+		assert.Equal(t, int64(len(want)), gotParts[i].SizeBytes, "part %d length", i+1)
+	}
+	assert.Len(t, f.store["/mp/p1"], MultipartPartSize)
+	assert.Len(t, f.store["/mp/p2"], 100)
 }
 
 func TestUploadMultipartAbortsOnPartFailure(t *testing.T) {

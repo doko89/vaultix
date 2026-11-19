@@ -1,12 +1,16 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,6 +318,20 @@ func TestVerifyObjects(t *testing.T) {
 	require.Error(t, err)
 }
 
+// putPartBytes PUTs part bytes through a presigned URL exactly like the
+// agent: plain unsigned PUT, ETag captured from the response.
+func putPartBytes(t *testing.T, partURL string, body []byte) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, partURL, bytes.NewReader(body))
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	return strings.Trim(resp.Header.Get("ETag"), `"`)
+}
+
 func TestMultipartOrchestration(t *testing.T) {
 	fake := newFakeS3(t)
 	c := testClient(t, fake, nil)
@@ -329,6 +347,10 @@ func TestMultipartOrchestration(t *testing.T) {
 	_, err = c.InitiateMultipartUpload(ctx, "jobB", key)
 	require.Error(t, err)
 
+	// Full round-trip: presign two parts, PUT bytes agent-style, complete
+	// with per-part checksums (deliberately out of order: the client sorts).
+	partBodies := [][]byte{[]byte("first-part-bytes"), []byte("second-part-bytes")}
+	etags := make([]string, 0, 2)
 	for _, part := range []int{1, 2} {
 		g, err := c.PresignUploadPart(ctx, "jobA", key, uploadID, part, 5*time.Minute)
 		require.NoError(t, err)
@@ -337,6 +359,8 @@ func TestMultipartOrchestration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, uploadID, u.Query().Get("uploadId"))
 		assert.NotEmpty(t, u.Query().Get("X-Amz-Signature"))
+		etags = append(etags, putPartBytes(t, g.URL, partBodies[part-1]))
+		require.NotEmpty(t, etags[part-1])
 	}
 	// Part grants honor job scope and part ranges.
 	_, err = c.PresignUploadPart(ctx, "jobB", key, uploadID, 1, time.Minute)
@@ -348,20 +372,59 @@ func TestMultipartOrchestration(t *testing.T) {
 	_, err = c.PresignUploadPart(ctx, "jobA", key, "", 1, time.Minute)
 	require.Error(t, err)
 
+	whole := append(append([]byte(nil), partBodies[0]...), partBodies[1]...)
+	wantChecksum := "sha256:" + sha256HexBytes(whole)
 	require.NoError(t, c.CompleteMultipartUpload(ctx, key, uploadID, []CompletedPart{
-		{PartNumber: 2, ETag: "etag-2"},
-		{PartNumber: 1, ETag: "etag-1"},
+		{PartNumber: 2, ETag: etags[1], SHA256: sha256HexBytes(partBodies[1]), SizeBytes: int64(len(partBodies[1]))},
+		{PartNumber: 1, ETag: etags[0], SHA256: sha256HexBytes(partBodies[0]), SizeBytes: int64(len(partBodies[0]))},
 	}))
 	u, ok := fake.getUpload(uploadID)
 	require.True(t, ok)
 	assert.True(t, u.completed)
 	assert.False(t, u.aborted)
-	assert.Equal(t, map[int]string{1: "etag-1", 2: "etag-2"}, u.parts)
+	assert.Equal(t, map[int]string{1: etags[0], 2: etags[1]}, u.parts)
 
-	// Completion validates its inputs.
-	require.Error(t, c.CompleteMultipartUpload(ctx, key, uploadID, nil))
-	require.Error(t, c.CompleteMultipartUpload(ctx, key, "", []CompletedPart{{PartNumber: 1, ETag: "e"}}))
-	require.Error(t, c.CompleteMultipartUpload(ctx, "raw/x.bin", uploadID, []CompletedPart{{PartNumber: 1, ETag: "e"}}))
+	// The stamped object HEAD-verifies exactly like a single-PUT object:
+	// stored checksum metadata equals the whole-object sha256.
+	meta, err := c.Head(ctx, key)
+	require.NoError(t, err)
+	require.True(t, meta.Exists)
+	assert.Equal(t, uint64(len(whole)), meta.Size)
+	assert.Equal(t, wantChecksum, meta.Checksum)
+	stored, ok := fake.getObject("test-bucket", key)
+	require.True(t, ok)
+	assert.Equal(t, whole, stored.body)
+
+	// ... and VerifyObjects passes on HEAD alone (one HEAD, no GET reads).
+	before := fake.hitCount()
+	ok, results, err := c.VerifyObjects(ctx, []ExpectedObject{
+		{Key: key, Checksum: wantChecksum, Size: uint64(len(whole)), CheckSize: true},
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].OK)
+	assert.Equal(t, 1, fake.hitCount()-before, "stamped objects verify HEAD-only")
+
+	// Completion validates its inputs (checksums are required, never
+	// optional).
+	good := CompletedPart{PartNumber: 1, ETag: "e", SHA256: sha256HexBytes([]byte("x")), SizeBytes: 1}
+	badSHA := good
+	badSHA.SHA256 = "not-hex"
+	for name, parts := range map[string][]CompletedPart{
+		"nil parts":     nil,
+		"missing sha":   {CompletedPart{PartNumber: 1, ETag: "e", SizeBytes: 1}},
+		"malformed sha": {badSHA},
+		"zero size":     {CompletedPart{PartNumber: 1, ETag: "e", SHA256: good.SHA256}},
+		"oversize part": {CompletedPart{PartNumber: 1, ETag: "e", SHA256: good.SHA256, SizeBytes: maxS3PartBytes + 1}},
+		"duplicate":     {good, good},
+		"missing etag":  {CompletedPart{PartNumber: 1, SHA256: good.SHA256, SizeBytes: 1}},
+		"bad number":    {CompletedPart{PartNumber: 0, ETag: "e", SHA256: good.SHA256, SizeBytes: 1}},
+	} {
+		require.Error(t, c.CompleteMultipartUpload(ctx, key, uploadID, parts), name)
+	}
+	require.Error(t, c.CompleteMultipartUpload(ctx, key, "", []CompletedPart{good}))
+	require.Error(t, c.CompleteMultipartUpload(ctx, "raw/x.bin", uploadID, []CompletedPart{good}))
 
 	// Abort path.
 	uploadID2, err := c.InitiateMultipartUpload(ctx, "jobA", key)
@@ -372,7 +435,187 @@ func TestMultipartOrchestration(t *testing.T) {
 	assert.True(t, u2.aborted)
 	require.Error(t, c.AbortMultipartUpload(ctx, key, ""))
 
-	assert.Empty(t, fake.authGapsSnapshot())
+	// Every manager call is SigV4-signed; only the agent-style presigned
+	// part PUTs (unsigned by design) show as auth gaps.
+	for _, gap := range fake.authGapsSnapshot() {
+		assert.True(t, strings.HasPrefix(gap, "PUT "), "unexpected unsigned call: %s", gap)
+	}
+	require.Len(t, fake.authGapsSnapshot(), 2)
+}
+
+func TestMultipartCompleteRejectsCorruptParts(t *testing.T) {
+	fake := newFakeS3(t)
+	c := testClient(t, fake, nil)
+	ctx := context.Background()
+
+	roundTrip := func(t *testing.T, key string, bodies [][]byte) (string, []CompletedPart) {
+		t.Helper()
+		uploadID, err := c.InitiateMultipartUpload(ctx, "jobA", key)
+		require.NoError(t, err)
+		parts := make([]CompletedPart, 0, len(bodies))
+		for i, body := range bodies {
+			g, err := c.PresignUploadPart(ctx, "jobA", key, uploadID, i+1, 5*time.Minute)
+			require.NoError(t, err)
+			etag := putPartBytes(t, g.URL, body)
+			parts = append(parts, CompletedPart{
+				PartNumber: i + 1, ETag: etag,
+				SHA256: sha256HexBytes(body), SizeBytes: int64(len(body)),
+			})
+		}
+		return uploadID, parts
+	}
+
+	t.Run("tampered part fails and object is removed", func(t *testing.T) {
+		key, err := ScopeKey("tenant1", "jobA", "tampered.bin")
+		require.NoError(t, err)
+		uploadID, parts := roundTrip(t, key, [][]byte{[]byte("part-one-data"), []byte("part-two-data")})
+		fake.mutatePart(uploadID, 2, func(b []byte) []byte {
+			b[0] ^= 0xff
+			return b
+		})
+		err = c.CompleteMultipartUpload(ctx, key, uploadID, parts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "part 2")
+		meta, headErr := c.Head(ctx, key)
+		require.NoError(t, headErr)
+		assert.False(t, meta.Exists, "unverified bytes must not linger")
+	})
+
+	t.Run("truncated part fails and object is removed", func(t *testing.T) {
+		key, err := ScopeKey("tenant1", "jobA", "truncated.bin")
+		require.NoError(t, err)
+		uploadID, parts := roundTrip(t, key, [][]byte{[]byte("part-one-data"), []byte("part-two-data")})
+		fake.mutatePart(uploadID, 2, func(b []byte) []byte { return b[:len(b)-4] })
+		require.Error(t, c.CompleteMultipartUpload(ctx, key, uploadID, parts))
+		meta, headErr := c.Head(ctx, key)
+		require.NoError(t, headErr)
+		assert.False(t, meta.Exists, "unverified bytes must not linger")
+	})
+
+	t.Run("wrong checksum claim fails", func(t *testing.T) {
+		key, err := ScopeKey("tenant1", "jobA", "wrongclaim.bin")
+		require.NoError(t, err)
+		uploadID, parts := roundTrip(t, key, [][]byte{[]byte("part-one-data")})
+		parts[0].SHA256 = sha256HexBytes([]byte("something-else"))
+		require.Error(t, c.CompleteMultipartUpload(ctx, key, uploadID, parts))
+	})
+}
+
+func TestMultipartCompleteStampsViaMultipartCopy(t *testing.T) {
+	// Force the >5 GiB stamp tier with tiny bodies.
+	oldThreshold, oldPartSize := stampCopyThresholdBytes, stampCopyPartSize
+	stampCopyThresholdBytes, stampCopyPartSize = 100, 100
+	t.Cleanup(func() { stampCopyThresholdBytes, stampCopyPartSize = oldThreshold, oldPartSize })
+
+	fake := newFakeS3(t)
+	c := testClient(t, fake, nil)
+	ctx := context.Background()
+	key, err := ScopeKey("tenant1", "jobA", "huge.bin")
+	require.NoError(t, err)
+
+	uploadID, err := c.InitiateMultipartUpload(ctx, "jobA", key)
+	require.NoError(t, err)
+	bodies := [][]byte{bytes.Repeat([]byte("a"), 90), bytes.Repeat([]byte("b"), 90), bytes.Repeat([]byte("c"), 90)}
+	parts := make([]CompletedPart, 0, len(bodies))
+	for i, body := range bodies {
+		g, err := c.PresignUploadPart(ctx, "jobA", key, uploadID, i+1, 5*time.Minute)
+		require.NoError(t, err)
+		etag := putPartBytes(t, g.URL, body)
+		parts = append(parts, CompletedPart{
+			PartNumber: i + 1, ETag: etag,
+			SHA256: sha256HexBytes(body), SizeBytes: int64(len(body)),
+		})
+	}
+	require.NoError(t, c.CompleteMultipartUpload(ctx, key, uploadID, parts))
+
+	whole := bytes.Join(bodies, nil)
+	meta, err := c.Head(ctx, key)
+	require.NoError(t, err)
+	require.True(t, meta.Exists)
+	assert.Equal(t, uint64(len(whole)), meta.Size)
+	assert.Equal(t, "sha256:"+sha256HexBytes(whole), meta.Checksum)
+	stored, ok := fake.getObject("test-bucket", key)
+	require.True(t, ok)
+	assert.Equal(t, whole, stored.body, "multipart copy must preserve every byte")
+}
+
+// rawCompleteUpload assembles an upload like a pre-checksum server: the
+// complete XML goes straight to storage with no verification or stamp, so
+// the object carries only its multipart ETag.
+func rawCompleteUpload(t *testing.T, fake *fakeS3, bucket, key, uploadID string, numbers []int) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString(`<CompleteMultipartUpload>`)
+	for _, n := range numbers {
+		fmt.Fprintf(&b, `<Part><PartNumber>%d</PartNumber><ETag>etag-%d</ETag></Part>`, n, n)
+	}
+	b.WriteString(`</CompleteMultipartUpload>`)
+	u := fake.server.URL + "/" + bucket + "/" + key + "?uploadId=" + url.QueryEscape(uploadID)
+	req, err := http.NewRequest(http.MethodPost, u, strings.NewReader(b.String()))
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestVerifyObjectsContentFallback(t *testing.T) {
+	fake := newFakeS3(t)
+	c := testClient(t, fake, nil)
+	ctx := context.Background()
+	key, err := ScopeKey("tenant1", "jobA", "legacy-mpu.bin")
+	require.NoError(t, err)
+
+	uploadID, err := c.InitiateMultipartUpload(ctx, "jobA", key)
+	require.NoError(t, err)
+	p1, p2 := []byte("legacy-part-one"), []byte("legacy-part-two")
+	fake.storePart(uploadID, 1, p1)
+	fake.storePart(uploadID, 2, p2)
+	rawCompleteUpload(t, fake, "test-bucket", key, uploadID, []int{1, 2})
+
+	// Sanity: the object really is ETag-only (multipart composite form).
+	stored, ok := fake.getObject("test-bucket", key)
+	require.True(t, ok)
+	assert.Contains(t, stored.etag, "-", "want multipart composite ETag, got %q", stored.etag)
+	assert.Empty(t, stored.metaChecksum)
+	assert.Empty(t, stored.sha256b64)
+
+	whole := append(append([]byte(nil), p1...), p2...)
+	want := "sha256:" + sha256HexBytes(whole)
+
+	// Intact bytes verify by content hash despite the useless ETag.
+	ok, results, err := c.VerifyObjects(ctx, []ExpectedObject{{Key: key, Checksum: want}})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].OK)
+
+	// Tampered-at-rest bytes fail: the reported hash is computed, never the
+	// stored ETag.
+	tampered := append([]byte(nil), whole...)
+	tampered[0] ^= 0xff
+	fake.putRawObject("test-bucket", key, fakeObject{body: tampered, etag: stored.etag})
+	ok, results, err = c.VerifyObjects(ctx, []ExpectedObject{{Key: key, Checksum: want}})
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0].Reason, "checksum mismatch")
+	assert.Contains(t, results[0].Reason, "sha256:"+sha256HexBytes(tampered))
+
+	// A non-sha256 expectation cannot be content-verified: plain mismatch,
+	// still a decision (no error).
+	ok, _, err = c.VerifyObjects(ctx, []ExpectedObject{{Key: key, Checksum: "md5:d41d8cd98f00b204e9800998ecf8427e"}})
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	// Size mismatches reject without reading any bytes.
+	before := fake.hitCount()
+	ok, results, err = c.VerifyObjects(ctx, []ExpectedObject{{Key: key, Checksum: want, Size: 1, CheckSize: true}})
+	require.NoError(t, err)
+	require.False(t, ok)
+	assert.Contains(t, results[0].Reason, "size mismatch")
+	assert.Equal(t, before+1, fake.hitCount(), "size reject must cost one HEAD, no GETs")
 }
 
 func TestRetryOnTransient(t *testing.T) {

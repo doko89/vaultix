@@ -2,12 +2,18 @@ package s3
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
 )
+
+// verifyContentChunkBytes sizes the ranged reads used by content-hash
+// fallback verification (see VerifyObjects): the stored object is hashed in
+// bounded chunks, never buffered whole.
+const verifyContentChunkBytes = int64(16 << 20)
 
 // Integrity verification (PRD §7.12): uploaded objects are verified via HEAD
 // + checksum comparison before a snapshot may be marked successful. Head
@@ -52,9 +58,34 @@ func (c *Client) VerifyObjects(ctx context.Context, expected []ExpectedObject) (
 			res.OK = false
 			res.Reason = "object not found"
 		case e.Checksum != "" && !checksumEqual(e.Checksum, meta.Checksum):
-			res.OK = false
-			res.Reason = fmt.Sprintf("checksum mismatch: want %s got %s",
-				e.Checksum, displayChecksum(meta.Checksum))
+			if e.CheckSize && meta.Size != e.Size {
+				// Cheap reject first: no point hashing bytes whose size is
+				// already wrong.
+				res.OK = false
+				res.Reason = fmt.Sprintf("size mismatch: want %d got %d", e.Size, meta.Size)
+				break
+			}
+			if !etagDerivedChecksum(meta.Checksum) {
+				res.OK = false
+				res.Reason = fmt.Sprintf("checksum mismatch: want %s got %s",
+					e.Checksum, displayChecksum(meta.Checksum))
+				break
+			}
+			// The store reports only an ETag (a multipart md5-of-md5s
+			// composite or a bare MD5), never a content hash: generalize
+			// the single-PUT HEAD comparison by hashing the stored bytes
+			// and comparing against the sha256 expectation. This covers
+			// multipart objects completed before checksum stamping existed
+			// (and any ETag-only object); stamped objects never reach here
+			// because their HEAD checksum compares directly above.
+			match, detail, err := c.verifyContent(ctx, e.Key, meta.Size, e.Checksum)
+			if err != nil {
+				return false, results, fmt.Errorf("s3: verify %q: %w", e.Key, err)
+			}
+			if !match {
+				res.OK = false
+				res.Reason = detail
+			}
 		case e.CheckSize && meta.Size != e.Size:
 			res.OK = false
 			res.Reason = fmt.Sprintf("size mismatch: want %d got %d", e.Size, meta.Size)
@@ -114,6 +145,56 @@ func isMD5Hex(s string) bool {
 // checksumEqual compares checksums case-insensitively after trimming.
 func checksumEqual(want, got string) bool {
 	return strings.EqualFold(strings.TrimSpace(want), strings.TrimSpace(got))
+}
+
+// etagDerivedChecksum reports whether a stored checksum carries no content
+// hash: empty, a bare-MD5 ETag, or an opaque (multipart composite) ETag.
+func etagDerivedChecksum(stored string) bool {
+	s := strings.ToLower(strings.TrimSpace(stored))
+	return s == "" || strings.HasPrefix(s, "etag:") || strings.HasPrefix(s, "md5:")
+}
+
+// verifyContent hashes the stored object in bounded ranged-GET chunks and
+// compares the sha256 against the expectation. A non-sha256 expectation
+// cannot be content-verified and reports a plain mismatch (a decision, not
+// an error); transport failures are errors so the gate fails closed.
+func (c *Client) verifyContent(ctx context.Context, key string, size uint64, want string) (bool, string, error) {
+	wantHex, ok := parseSHA256Expectation(want)
+	if !ok {
+		return false, fmt.Sprintf("checksum mismatch: want %s got <content verification needs a sha256 expectation>", want), nil
+	}
+	h := sha256.New()
+	var offset uint64
+	for offset < size {
+		n := verifyContentChunkBytes
+		if remaining := int64(size - offset); remaining < n {
+			n = remaining
+		}
+		chunk, err := c.getObjectRange(ctx, key, int64(offset), n)
+		if err != nil {
+			return false, "", err
+		}
+		_, _ = h.Write(chunk)
+		offset += uint64(n)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(got, wantHex) {
+		return false, fmt.Sprintf("checksum mismatch: want %s got sha256:%s", want, got), nil
+	}
+	return true, "", nil
+}
+
+// parseSHA256Expectation extracts the hex digest from a "sha256:<hex>" (or
+// bare-hex, tolerated like the backup gate) expectation.
+func parseSHA256Expectation(want string) (string, bool) {
+	v := strings.TrimSpace(want)
+	if len(v) > len("sha256:") && strings.EqualFold(v[:len("sha256:")], "sha256:") {
+		v = v[len("sha256:"):]
+	}
+	if !isSHA256Hex(v) {
+		return "", false
+	}
+	return v, true
 }
 
 func displayChecksum(v string) string {

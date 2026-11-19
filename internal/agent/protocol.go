@@ -235,10 +235,16 @@ type MultipartInitResponse struct {
 	PartURLs []string `json:"part_urls"`
 }
 
-// MultipartPart identifies one completed part for completion.
+// MultipartPart identifies one completed part for completion. SHA256 is the
+// bare lowercase hex sha256 of the exact part bytes PUT to storage (computed
+// while streaming, no re-reads); SizeBytes is that part's byte length. Both
+// are required by current managers: the completion gate hash-verifies every
+// part against them before the object may verify.
 type MultipartPart struct {
-	Number int    `json:"number"`
-	ETag   string `json:"etag"`
+	Number    int    `json:"number"`
+	ETag      string `json:"etag"`
+	SHA256    string `json:"sha256,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
 }
 
 // MultipartCompleteRequest is POST /api/agent/jobs/{id}/multipart/complete.

@@ -35,10 +35,15 @@ type PartGrant struct {
 	ExpiresAt  time.Time
 }
 
-// MultipartPart identifies one uploaded part for completion.
+// MultipartPart identifies one uploaded part for completion. SHA256 is the
+// bare hex sha256 of the exact part bytes the agent PUT; SizeBytes is that
+// part's byte length. The store hash-verifies every part against them at
+// completion (S3 ETags are md5 composites, never content hashes).
 type MultipartPart struct {
 	PartNumber int
 	ETag       string
+	SHA256     string
+	SizeBytes  int64
 }
 
 // ExpectedObject is one manifest entry to verify before success.

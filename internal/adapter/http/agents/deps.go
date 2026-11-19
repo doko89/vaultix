@@ -111,10 +111,16 @@ type ObjectGrant struct {
 	ExpiresAt time.Time         `json:"expires_at"`
 }
 
-// MultipartPart identifies one uploaded part for completion.
+// MultipartPart identifies one uploaded part for completion. SHA256 is the
+// bare hex sha256 of the exact part bytes the agent PUT; SizeBytes is that
+// part's byte length. Both are required: the completion gate hash-verifies
+// every part against them (a multipart ETag is an md5-of-md5s composite and
+// can never be compared to a content hash).
 type MultipartPart struct {
 	PartNumber int
 	ETag       string
+	SHA256     string
+	SizeBytes  int64
 }
 
 // GrantService mints short-lived, strictly job-scoped storage grants for
