@@ -1,13 +1,46 @@
 [Unit]
-Description=Vaultix Agent
+Description=Vaultix Agent - per-VM backup executor
+Documentation=https://github.com/vaultix/vaultix
 After=network-online.target docker.service
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/vaultix-agent run
-Restart=on-failure
-RestartSec=5
+User=vaultix
+Group=vaultix
+# NOTE: for Docker discovery the vaultix user must be in the docker group
+# (highly privileged; only enable when Docker integration is configured).
+# Enrollment secret / overrides; optional file, absent by default.
+EnvironmentFile=-/etc/vaultix/agent.env
+# Agent config file (viper): manager URL, TLS, log level, data dir.
+ExecStart=/usr/local/bin/vaultix-agent run --config /etc/vaultix/agent.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+# Local job state for restart recovery (TECH_SPEC section 4).
+WorkingDirectory=/var/lib/vaultix
+LogsDirectory=vaultix
+StateDirectory=vaultix
+StateDirectoryMode=0750
+# Hardening: agent reads backup sources (read-only mounts stay readable) and
+# shells out to db tools; confine writes to its state/log dirs.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/vaultix /var/log/vaultix
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+# MemoryDenyWriteExecute intentionally off: Go runtime needs executable heap.
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

@@ -1,11 +1,114 @@
-# Vaultix local dev stack (stub). Full service definitions are added by the backend team.
+# Vaultix local dev stack.
+#
+# Usage: `docker compose -f deploy/docker-compose.yml up -d` (or `make compose-up`)
+#
+# PROD HARDENING (do NOT use these dev defaults in production):
+# - Secrets: inject via environment from a secret manager (or *_FILE vars), never
+#   commit credentials. Rotate MINIO_ROOT_PASSWORD and POSTGRES_PASSWORD.
+# - Ports: do not publish postgres/minio ports to the host; keep them on the
+#   internal network and reach them through the manager or a bastion.
+# - TLS: terminate TLS in front of the manager (reverse proxy) and enable TLS on
+#   postgres (sslmode=require+) and MinIO (certs dir); enable mTLS for agents
+#   per PRD section 6.3.
+# - Backups: pgdata holds ALL metadata — back it up (pg_basebackup/WAL archiving
+#   to off-host storage) separately from the backup payload buckets.
+# - Resources: set `deploy.resources.limits` and log rotation on every service.
+# - Images: pin digest-pinned images from an internal mirror; run as non-root
+#   (manager image already drops privileges; see deploy/manager.Dockerfile).
+
 services:
-  # PostgreSQL metadata database (see TECH_SPEC section 3).
+  # PostgreSQL metadata database (TECH_SPEC section 3: single DB, sqlc + pgx).
   postgres:
     image: postgres:16
-    # TODO: ports, volumes, env
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vaultix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaultix-dev-only}
+      POSTGRES_DB: ${POSTGRES_DB:-vaultix}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432" # dev convenience; REMOVE in prod
+    volumes:
+      # Named volume: survives `compose down`. Destroy with `compose down -v`.
+      # Prod: mount off-host / managed storage and enable PITR backups.
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaultix}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  # S3-compatible object storage for local dev (MinIO).
+  # S3-compatible object storage for local dev (MinIO). Agents talk S3 API here
+  # in dev; in prod this is real S3 or another S3-compatible endpoint and the
+  # manager only stores endpoint/bucket config + issues presigned URLs.
   minio:
-    image: minio/minio
-    # TODO: ports, volumes, command
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-vaultix}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-vaultix-dev-only-change-me}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000" # S3 API; REMOVE in prod
+      - "${MINIO_CONSOLE_PORT:-9001}:9001" # console; REMOVE in prod
+    volumes:
+      # Named volume: dev payload data. Prod: real object storage, not a volume.
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot dev setup: creates the default bucket. Exits 0 when done.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-38Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-vaultix} $${MINIO_ROOT_PASSWORD:-vaultix-dev-only-change-me} &&
+      mc mb --ignore-existing local/$${MINIO_BUCKET:-vaultix-backups} &&
+      echo 'bucket ready: $${MINIO_BUCKET:-vaultix-backups}'
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-vaultix}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-vaultix-dev-only-change-me}
+      MINIO_BUCKET: ${MINIO_BUCKET:-vaultix-backups}
+    restart: "no"
+
+  # Vaultix manager (control plane: API + scheduler + embedded web UI).
+  # NOTE: `serve`/`migrate` subcommands land with the backend team (TECH_SPEC
+  # section 4/7: `manager migrate` then `manager serve`); env wiring below is
+  # ready for them. Until then this service is exercised via `docker compose
+  # config` / build only.
+  manager:
+    build:
+      context: ..
+      dockerfile: deploy/manager.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      VAULTIX_ADDR: ":8080"
+      VAULTIX_DATABASE_URL: postgres://${POSTGRES_USER:-vaultix}:${POSTGRES_PASSWORD:-vaultix-dev-only}@postgres:5432/${POSTGRES_DB:-vaultix}?sslmode=disable
+      VAULTIX_S3_ENDPOINT: http://minio:9000
+      VAULTIX_S3_BUCKET: ${MINIO_BUCKET:-vaultix-backups}
+      VAULTIX_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-vaultix}
+      VAULTIX_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-vaultix-dev-only-change-me}
+      VAULTIX_S3_REGION: ${MINIO_REGION:-us-east-1}
+      VAULTIX_S3_USE_SSL: "false" # dev only; prod must be true
+    ports:
+      - "${MANAGER_PORT:-8080}:8080"
+    # No volumes: manager is stateless; state lives in postgres (metadata) and
+    # S3 (payloads). Prod: mount TLS certs / config read-only if file-based.
+
+volumes:
+  pgdata:
+    name: vaultix-pgdata
+  minio-data:
+    name: vaultix-minio-data
