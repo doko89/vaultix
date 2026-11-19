@@ -11,6 +11,53 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimNextBackupJob = `-- name: ClaimNextBackupJob :one
+UPDATE backup_jobs AS bj
+SET state = 'assigned', updated_at = now()
+WHERE bj.id = (
+    SELECT b.id FROM backup_jobs AS b
+    WHERE b.state = 'queued' AND b.agent_id = $1
+    ORDER BY b.queued_at ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, agent_id, policy_id, policy_version, policy_version_id, schedule_id, state, progress_pct, bytes_read, bytes_compressed, bytes_uploaded, encryption_enabled, encryption_key_reference, target_resources, error_code, error_message, attempts, queued_at, started_at, finished_at, created_at, updated_at
+`
+
+type ClaimNextBackupJobParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) ClaimNextBackupJob(ctx context.Context, arg ClaimNextBackupJobParams) (BackupJob, error) {
+	row := q.db.QueryRow(ctx, claimNextBackupJob, arg.AgentID)
+	var i BackupJob
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.PolicyID,
+		&i.PolicyVersion,
+		&i.PolicyVersionID,
+		&i.ScheduleID,
+		&i.State,
+		&i.ProgressPct,
+		&i.BytesRead,
+		&i.BytesCompressed,
+		&i.BytesUploaded,
+		&i.EncryptionEnabled,
+		&i.EncryptionKeyReference,
+		&i.TargetResources,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.Attempts,
+		&i.QueuedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const confirmRestoreJob = `-- name: ConfirmRestoreJob :one
 UPDATE restore_jobs SET confirmed_at = now(), updated_at = now()
 WHERE id = $1
@@ -45,6 +92,42 @@ func (q *Queries) ConfirmRestoreJob(ctx context.Context, arg ConfirmRestoreJobPa
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const countBackupJobsFiltered = `-- name: CountBackupJobsFiltered :one
+SELECT count(*) FROM backup_jobs
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+  AND ($2::uuid IS NULL OR policy_id = $2)
+  AND ($3 = '' OR state = $3)
+`
+
+type CountBackupJobsFilteredParams struct {
+	Column1 pgtype.UUID `json:"column_1"`
+	Column2 pgtype.UUID `json:"column_2"`
+	Column3 interface{} `json:"column_3"`
+}
+
+func (q *Queries) CountBackupJobsFiltered(ctx context.Context, arg CountBackupJobsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countBackupJobsFiltered, arg.Column1, arg.Column2, arg.Column3)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRestoreJobsFiltered = `-- name: CountRestoreJobsFiltered :one
+SELECT count(*) FROM restore_jobs
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+`
+
+type CountRestoreJobsFilteredParams struct {
+	Column1 pgtype.UUID `json:"column_1"`
+}
+
+func (q *Queries) CountRestoreJobsFiltered(ctx context.Context, arg CountRestoreJobsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRestoreJobsFiltered, arg.Column1)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createBackupJob = `-- name: CreateBackupJob :one
@@ -656,6 +739,72 @@ func (q *Queries) ListBackupJobsByState(ctx context.Context, arg ListBackupJobsB
 	return items, nil
 }
 
+const listBackupJobsFiltered = `-- name: ListBackupJobsFiltered :many
+SELECT id, agent_id, policy_id, policy_version, policy_version_id, schedule_id, state, progress_pct, bytes_read, bytes_compressed, bytes_uploaded, encryption_enabled, encryption_key_reference, target_resources, error_code, error_message, attempts, queued_at, started_at, finished_at, created_at, updated_at FROM backup_jobs
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+  AND ($2::uuid IS NULL OR policy_id = $2)
+  AND ($3 = '' OR state = $3)
+ORDER BY created_at DESC
+LIMIT $4 OFFSET $5
+`
+
+type ListBackupJobsFilteredParams struct {
+	Column1 pgtype.UUID `json:"column_1"`
+	Column2 pgtype.UUID `json:"column_2"`
+	Column3 interface{} `json:"column_3"`
+	Limit   int32       `json:"limit"`
+	Offset  int32       `json:"offset"`
+}
+
+func (q *Queries) ListBackupJobsFiltered(ctx context.Context, arg ListBackupJobsFilteredParams) ([]BackupJob, error) {
+	rows, err := q.db.Query(ctx, listBackupJobsFiltered,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BackupJob{}
+	for rows.Next() {
+		var i BackupJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.PolicyID,
+			&i.PolicyVersion,
+			&i.PolicyVersionID,
+			&i.ScheduleID,
+			&i.State,
+			&i.ProgressPct,
+			&i.BytesRead,
+			&i.BytesCompressed,
+			&i.BytesUploaded,
+			&i.EncryptionEnabled,
+			&i.EncryptionKeyReference,
+			&i.TargetResources,
+			&i.ErrorCode,
+			&i.ErrorMessage,
+			&i.Attempts,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRestoreJobs = `-- name: ListRestoreJobs :many
 SELECT id, agent_id, snapshot_id, restore_type, source_paths, destination_path, state, progress_pct, error_code, error_message, attempts, requested_by, confirmed_at, queued_at, started_at, finished_at, created_at, updated_at FROM restore_jobs
 ORDER BY created_at DESC
@@ -813,6 +962,58 @@ func (q *Queries) ListRestoreJobsBySnapshot(ctx context.Context, arg ListRestore
 	return items, nil
 }
 
+const listRestoreJobsFiltered = `-- name: ListRestoreJobsFiltered :many
+SELECT id, agent_id, snapshot_id, restore_type, source_paths, destination_path, state, progress_pct, error_code, error_message, attempts, requested_by, confirmed_at, queued_at, started_at, finished_at, created_at, updated_at FROM restore_jobs
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListRestoreJobsFilteredParams struct {
+	Column1 pgtype.UUID `json:"column_1"`
+	Limit   int32       `json:"limit"`
+	Offset  int32       `json:"offset"`
+}
+
+func (q *Queries) ListRestoreJobsFiltered(ctx context.Context, arg ListRestoreJobsFilteredParams) ([]RestoreJob, error) {
+	rows, err := q.db.Query(ctx, listRestoreJobsFiltered, arg.Column1, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RestoreJob{}
+	for rows.Next() {
+		var i RestoreJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.SnapshotID,
+			&i.RestoreType,
+			&i.SourcePaths,
+			&i.DestinationPath,
+			&i.State,
+			&i.ProgressPct,
+			&i.ErrorCode,
+			&i.ErrorMessage,
+			&i.Attempts,
+			&i.RequestedBy,
+			&i.ConfirmedAt,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setBackupJobState = `-- name: SetBackupJobState :one
 UPDATE backup_jobs
 SET state = $2,
@@ -899,6 +1100,78 @@ func (q *Queries) SetRestoreJobState(ctx context.Context, arg SetRestoreJobState
 	return i, err
 }
 
+const updateBackupJob = `-- name: UpdateBackupJob :one
+UPDATE backup_jobs
+SET state = $2, progress_pct = $3, bytes_read = $4, bytes_compressed = $5,
+    bytes_uploaded = $6, encryption_enabled = $7, encryption_key_reference = $8,
+    target_resources = $9, error_code = $10, error_message = $11,
+    attempts = $12, started_at = $13, finished_at = $14, updated_at = now()
+WHERE id = $1
+RETURNING id, agent_id, policy_id, policy_version, policy_version_id, schedule_id, state, progress_pct, bytes_read, bytes_compressed, bytes_uploaded, encryption_enabled, encryption_key_reference, target_resources, error_code, error_message, attempts, queued_at, started_at, finished_at, created_at, updated_at
+`
+
+type UpdateBackupJobParams struct {
+	ID                     pgtype.UUID        `json:"id"`
+	State                  string             `json:"state"`
+	ProgressPct            int32              `json:"progress_pct"`
+	BytesRead              int64              `json:"bytes_read"`
+	BytesCompressed        int64              `json:"bytes_compressed"`
+	BytesUploaded          int64              `json:"bytes_uploaded"`
+	EncryptionEnabled      bool               `json:"encryption_enabled"`
+	EncryptionKeyReference string             `json:"encryption_key_reference"`
+	TargetResources        []byte             `json:"target_resources"`
+	ErrorCode              pgtype.Text        `json:"error_code"`
+	ErrorMessage           pgtype.Text        `json:"error_message"`
+	Attempts               int32              `json:"attempts"`
+	StartedAt              pgtype.Timestamptz `json:"started_at"`
+	FinishedAt             pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) UpdateBackupJob(ctx context.Context, arg UpdateBackupJobParams) (BackupJob, error) {
+	row := q.db.QueryRow(ctx, updateBackupJob,
+		arg.ID,
+		arg.State,
+		arg.ProgressPct,
+		arg.BytesRead,
+		arg.BytesCompressed,
+		arg.BytesUploaded,
+		arg.EncryptionEnabled,
+		arg.EncryptionKeyReference,
+		arg.TargetResources,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.Attempts,
+		arg.StartedAt,
+		arg.FinishedAt,
+	)
+	var i BackupJob
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.PolicyID,
+		&i.PolicyVersion,
+		&i.PolicyVersionID,
+		&i.ScheduleID,
+		&i.State,
+		&i.ProgressPct,
+		&i.BytesRead,
+		&i.BytesCompressed,
+		&i.BytesUploaded,
+		&i.EncryptionEnabled,
+		&i.EncryptionKeyReference,
+		&i.TargetResources,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.Attempts,
+		&i.QueuedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateBackupJobProgress = `-- name: UpdateBackupJobProgress :exec
 UPDATE backup_jobs
 SET progress_pct = $2, bytes_read = $3, bytes_compressed = $4,
@@ -923,4 +1196,61 @@ func (q *Queries) UpdateBackupJobProgress(ctx context.Context, arg UpdateBackupJ
 		arg.BytesUploaded,
 	)
 	return err
+}
+
+const updateRestoreJob = `-- name: UpdateRestoreJob :one
+UPDATE restore_jobs
+SET state = $2, progress_pct = $3, error_code = $4, error_message = $5,
+    destination_path = $6, source_paths = $7, started_at = $8, finished_at = $9,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, agent_id, snapshot_id, restore_type, source_paths, destination_path, state, progress_pct, error_code, error_message, attempts, requested_by, confirmed_at, queued_at, started_at, finished_at, created_at, updated_at
+`
+
+type UpdateRestoreJobParams struct {
+	ID              pgtype.UUID        `json:"id"`
+	State           string             `json:"state"`
+	ProgressPct     int32              `json:"progress_pct"`
+	ErrorCode       pgtype.Text        `json:"error_code"`
+	ErrorMessage    pgtype.Text        `json:"error_message"`
+	DestinationPath pgtype.Text        `json:"destination_path"`
+	SourcePaths     []byte             `json:"source_paths"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) UpdateRestoreJob(ctx context.Context, arg UpdateRestoreJobParams) (RestoreJob, error) {
+	row := q.db.QueryRow(ctx, updateRestoreJob,
+		arg.ID,
+		arg.State,
+		arg.ProgressPct,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.DestinationPath,
+		arg.SourcePaths,
+		arg.StartedAt,
+		arg.FinishedAt,
+	)
+	var i RestoreJob
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.SnapshotID,
+		&i.RestoreType,
+		&i.SourcePaths,
+		&i.DestinationPath,
+		&i.State,
+		&i.ProgressPct,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.Attempts,
+		&i.RequestedBy,
+		&i.ConfirmedAt,
+		&i.QueuedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

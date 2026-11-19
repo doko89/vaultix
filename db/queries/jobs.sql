@@ -112,3 +112,56 @@ SET state = 'failed', error_code = $2, error_message = $3,
     attempts = attempts + 1, finished_at = now(), updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: UpdateBackupJob :one
+UPDATE backup_jobs
+SET state = $2, progress_pct = $3, bytes_read = $4, bytes_compressed = $5,
+    bytes_uploaded = $6, encryption_enabled = $7, encryption_key_reference = $8,
+    target_resources = $9, error_code = $10, error_message = $11,
+    attempts = $12, started_at = $13, finished_at = $14, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ListBackupJobsFiltered :many
+SELECT * FROM backup_jobs
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+  AND ($2::uuid IS NULL OR policy_id = $2)
+  AND ($3 = '' OR state = $3)
+ORDER BY created_at DESC
+LIMIT $4 OFFSET $5;
+
+-- name: CountBackupJobsFiltered :one
+SELECT count(*) FROM backup_jobs
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+  AND ($2::uuid IS NULL OR policy_id = $2)
+  AND ($3 = '' OR state = $3);
+
+-- name: ClaimNextBackupJob :one
+UPDATE backup_jobs AS bj
+SET state = 'assigned', updated_at = now()
+WHERE bj.id = (
+    SELECT b.id FROM backup_jobs AS b
+    WHERE b.state = 'queued' AND b.agent_id = $1
+    ORDER BY b.queued_at ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING *;
+
+-- name: UpdateRestoreJob :one
+UPDATE restore_jobs
+SET state = $2, progress_pct = $3, error_code = $4, error_message = $5,
+    destination_path = $6, source_paths = $7, started_at = $8, finished_at = $9,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ListRestoreJobsFiltered :many
+SELECT * FROM restore_jobs
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountRestoreJobsFiltered :one
+SELECT count(*) FROM restore_jobs
+WHERE ($1::uuid IS NULL OR agent_id = $1);

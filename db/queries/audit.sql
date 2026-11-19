@@ -27,3 +27,19 @@ SELECT * FROM audit_logs
 WHERE target_type = $1 AND target_id = $2
 ORDER BY created_at DESC
 LIMIT $3 OFFSET $4;
+
+-- name: ListAuditEventsFiltered :many
+SELECT * FROM audit_logs
+WHERE ($1::uuid IS NULL OR actor_id = $1)
+  AND ($2 = '' OR action = $2)
+  AND ($3::timestamptz IS NULL OR created_at >= $3)
+  AND ($4::timestamptz IS NULL OR created_at <= $4)
+ORDER BY created_at DESC
+LIMIT $5 OFFSET $6;
+
+-- name: CountAuditEventsFiltered :one
+SELECT count(*) FROM audit_logs
+WHERE ($1::uuid IS NULL OR actor_id = $1)
+  AND ($2 = '' OR action = $2)
+  AND ($3::timestamptz IS NULL OR created_at >= $3)
+  AND ($4::timestamptz IS NULL OR created_at <= $4);

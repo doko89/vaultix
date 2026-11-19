@@ -65,3 +65,29 @@ UPDATE user_external_identities SET is_disabled = $2, updated_at = now() WHERE i
 
 -- name: DeleteIdentity :exec
 DELETE FROM user_external_identities WHERE id = $1;
+
+-- name: GetProviderByIssuer :one
+SELECT id, name, issuer, discovery_url, endpoints, client_id,
+       scopes, claims_mapping, default_role_id, is_enabled,
+       allow_jit_provisioning, created_at, updated_at
+FROM oidc_providers WHERE issuer = $1;
+
+-- name: UpdateProvider :one
+UPDATE oidc_providers
+SET name = $2, issuer = $3, discovery_url = $4, endpoints = $5,
+    client_id = $6, client_secret_encrypted = $7, scopes = $8,
+    claims_mapping = $9, default_role_id = $10, is_enabled = $11,
+    allow_jit_provisioning = $12, updated_at = now()
+WHERE id = $1
+RETURNING id, name, issuer, discovery_url, endpoints, client_id,
+    scopes, claims_mapping, default_role_id, is_enabled,
+    allow_jit_provisioning, created_at, updated_at;
+
+-- name: GetIdentityByID :one
+SELECT * FROM user_external_identities WHERE id = $1;
+
+-- name: UpdateIdentity :one
+UPDATE user_external_identities
+SET email = $2, claims = $3, is_disabled = $4, last_login_at = $5, updated_at = now()
+WHERE id = $1
+RETURNING *;

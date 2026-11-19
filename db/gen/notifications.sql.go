@@ -180,3 +180,35 @@ func (q *Queries) RequeueNotification(ctx context.Context, arg RequeueNotificati
 	_, err := q.db.Exec(ctx, requeueNotification, arg.ID, arg.LastError, arg.ScheduledAt)
 	return err
 }
+
+const updateNotification = `-- name: UpdateNotification :exec
+UPDATE notifications
+SET recipient = $2, subject = $3, body = $4, state = $5,
+    attempts = $6, last_error = $7, sent_at = $8
+WHERE id = $1
+`
+
+type UpdateNotificationParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	Recipient string             `json:"recipient"`
+	Subject   string             `json:"subject"`
+	Body      string             `json:"body"`
+	State     string             `json:"state"`
+	Attempts  int32              `json:"attempts"`
+	LastError pgtype.Text        `json:"last_error"`
+	SentAt    pgtype.Timestamptz `json:"sent_at"`
+}
+
+func (q *Queries) UpdateNotification(ctx context.Context, arg UpdateNotificationParams) error {
+	_, err := q.db.Exec(ctx, updateNotification,
+		arg.ID,
+		arg.Recipient,
+		arg.Subject,
+		arg.Body,
+		arg.State,
+		arg.Attempts,
+		arg.LastError,
+		arg.SentAt,
+	)
+	return err
+}

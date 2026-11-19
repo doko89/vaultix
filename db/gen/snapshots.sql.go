@@ -70,6 +70,42 @@ func (q *Queries) CountSnapshotObjects(ctx context.Context, arg CountSnapshotObj
 	return i, err
 }
 
+const countSnapshotsFiltered = `-- name: CountSnapshotsFiltered :one
+SELECT count(*) FROM snapshots
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+  AND ($2::uuid IS NULL OR policy_id = $2)
+  AND ($3 = '' OR state = $3)
+  AND ($4 = '' OR storage_prefix = $4)
+  AND ($5::timestamptz IS NULL OR snapshot_time >= $5)
+  AND ($6::timestamptz IS NULL OR snapshot_time <= $6)
+  AND ($7::bool IS NOT TRUE OR (state = 'valid' AND EXISTS (SELECT 1 FROM snapshot_manifests sm WHERE sm.snapshot_id = snapshots.id)))
+`
+
+type CountSnapshotsFilteredParams struct {
+	Column1 pgtype.UUID        `json:"column_1"`
+	Column2 pgtype.UUID        `json:"column_2"`
+	Column3 interface{}        `json:"column_3"`
+	Column4 interface{}        `json:"column_4"`
+	Column5 pgtype.Timestamptz `json:"column_5"`
+	Column6 pgtype.Timestamptz `json:"column_6"`
+	Column7 bool               `json:"column_7"`
+}
+
+func (q *Queries) CountSnapshotsFiltered(ctx context.Context, arg CountSnapshotsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSnapshotsFiltered,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Column4,
+		arg.Column5,
+		arg.Column6,
+		arg.Column7,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createManifest = `-- name: CreateManifest :one
 INSERT INTO snapshot_manifests (snapshot_id, manifest_hash, manifest_size_bytes, storage_key, content)
 VALUES ($1, $2, $3, $4, $5)
@@ -173,6 +209,29 @@ type DeleteSnapshotParams struct {
 func (q *Queries) DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) error {
 	_, err := q.db.Exec(ctx, deleteSnapshot, arg.ID)
 	return err
+}
+
+const getManifestByID = `-- name: GetManifestByID :one
+SELECT id, snapshot_id, manifest_hash, manifest_size_bytes, storage_key, content, created_at FROM snapshot_manifests WHERE id = $1
+`
+
+type GetManifestByIDParams struct {
+	ID pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) GetManifestByID(ctx context.Context, arg GetManifestByIDParams) (SnapshotManifest, error) {
+	row := q.db.QueryRow(ctx, getManifestByID, arg.ID)
+	var i SnapshotManifest
+	err := row.Scan(
+		&i.ID,
+		&i.SnapshotID,
+		&i.ManifestHash,
+		&i.ManifestSizeBytes,
+		&i.StorageKey,
+		&i.Content,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getManifestBySnapshot = `-- name: GetManifestBySnapshot :one
@@ -513,6 +572,80 @@ func (q *Queries) ListSnapshotsByPolicy(ctx context.Context, arg ListSnapshotsBy
 	return items, nil
 }
 
+const listSnapshotsFiltered = `-- name: ListSnapshotsFiltered :many
+SELECT id, agent_id, policy_id, policy_version, backup_job_id, name, snapshot_time, state, bytes_stored, file_count, encryption_enabled, encryption_key_reference, storage_destination_id, storage_prefix, verified_at, expires_at, created_at, updated_at FROM snapshots
+WHERE ($1::uuid IS NULL OR agent_id = $1)
+  AND ($2::uuid IS NULL OR policy_id = $2)
+  AND ($3 = '' OR state = $3)
+  AND ($4 = '' OR storage_prefix = $4)
+  AND ($5::timestamptz IS NULL OR snapshot_time >= $5)
+  AND ($6::timestamptz IS NULL OR snapshot_time <= $6)
+  AND ($7::bool IS NOT TRUE OR (state = 'valid' AND EXISTS (SELECT 1 FROM snapshot_manifests sm WHERE sm.snapshot_id = snapshots.id)))
+ORDER BY snapshot_time DESC
+LIMIT $8 OFFSET $9
+`
+
+type ListSnapshotsFilteredParams struct {
+	Column1 pgtype.UUID        `json:"column_1"`
+	Column2 pgtype.UUID        `json:"column_2"`
+	Column3 interface{}        `json:"column_3"`
+	Column4 interface{}        `json:"column_4"`
+	Column5 pgtype.Timestamptz `json:"column_5"`
+	Column6 pgtype.Timestamptz `json:"column_6"`
+	Column7 bool               `json:"column_7"`
+	Limit   int32              `json:"limit"`
+	Offset  int32              `json:"offset"`
+}
+
+func (q *Queries) ListSnapshotsFiltered(ctx context.Context, arg ListSnapshotsFilteredParams) ([]Snapshot, error) {
+	rows, err := q.db.Query(ctx, listSnapshotsFiltered,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Column4,
+		arg.Column5,
+		arg.Column6,
+		arg.Column7,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Snapshot{}
+	for rows.Next() {
+		var i Snapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.PolicyID,
+			&i.PolicyVersion,
+			&i.BackupJobID,
+			&i.Name,
+			&i.SnapshotTime,
+			&i.State,
+			&i.BytesStored,
+			&i.FileCount,
+			&i.EncryptionEnabled,
+			&i.EncryptionKeyReference,
+			&i.StorageDestinationID,
+			&i.StoragePrefix,
+			&i.VerifiedAt,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listValidSnapshotsByPolicy = `-- name: ListValidSnapshotsByPolicy :many
 SELECT id, agent_id, policy_id, policy_version, backup_job_id, name, snapshot_time, state, bytes_stored, file_count, encryption_enabled, encryption_key_reference, storage_destination_id, storage_prefix, verified_at, expires_at, created_at, updated_at FROM snapshots
 WHERE policy_id = $1 AND state = 'valid'
@@ -632,6 +765,159 @@ func (q *Queries) SetSnapshotState(ctx context.Context, arg SetSnapshotStatePara
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateSnapshot = `-- name: UpdateSnapshot :one
+UPDATE snapshots
+SET name = $2,
+    state = $3,
+    verified_at = CASE WHEN $3 = 'valid' THEN coalesce(verified_at, now()) ELSE verified_at END,
+    bytes_stored = $4,
+    file_count = $5,
+    encryption_enabled = $6,
+    encryption_key_reference = $7,
+    storage_destination_id = $8,
+    storage_prefix = $9,
+    snapshot_time = COALESCE($10, snapshot_time),
+    expires_at = $11,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, agent_id, policy_id, policy_version, backup_job_id, name, snapshot_time, state, bytes_stored, file_count, encryption_enabled, encryption_key_reference, storage_destination_id, storage_prefix, verified_at, expires_at, created_at, updated_at
+`
+
+type UpdateSnapshotParams struct {
+	ID                     pgtype.UUID        `json:"id"`
+	Name                   string             `json:"name"`
+	State                  string             `json:"state"`
+	BytesStored            int64              `json:"bytes_stored"`
+	FileCount              int64              `json:"file_count"`
+	EncryptionEnabled      bool               `json:"encryption_enabled"`
+	EncryptionKeyReference string             `json:"encryption_key_reference"`
+	StorageDestinationID   pgtype.UUID        `json:"storage_destination_id"`
+	StoragePrefix          string             `json:"storage_prefix"`
+	SnapshotTime           pgtype.Timestamptz `json:"snapshot_time"`
+	ExpiresAt              pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) UpdateSnapshot(ctx context.Context, arg UpdateSnapshotParams) (Snapshot, error) {
+	row := q.db.QueryRow(ctx, updateSnapshot,
+		arg.ID,
+		arg.Name,
+		arg.State,
+		arg.BytesStored,
+		arg.FileCount,
+		arg.EncryptionEnabled,
+		arg.EncryptionKeyReference,
+		arg.StorageDestinationID,
+		arg.StoragePrefix,
+		arg.SnapshotTime,
+		arg.ExpiresAt,
+	)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.PolicyID,
+		&i.PolicyVersion,
+		&i.BackupJobID,
+		&i.Name,
+		&i.SnapshotTime,
+		&i.State,
+		&i.BytesStored,
+		&i.FileCount,
+		&i.EncryptionEnabled,
+		&i.EncryptionKeyReference,
+		&i.StorageDestinationID,
+		&i.StoragePrefix,
+		&i.VerifiedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertSnapshotManifest = `-- name: UpsertSnapshotManifest :one
+INSERT INTO snapshot_manifests (snapshot_id, manifest_hash, manifest_size_bytes, storage_key, content)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (snapshot_id)
+DO UPDATE SET manifest_hash = EXCLUDED.manifest_hash,
+              manifest_size_bytes = EXCLUDED.manifest_size_bytes,
+              storage_key = EXCLUDED.storage_key,
+              content = EXCLUDED.content
+RETURNING id, snapshot_id, manifest_hash, manifest_size_bytes, storage_key, content, created_at
+`
+
+type UpsertSnapshotManifestParams struct {
+	SnapshotID        pgtype.UUID `json:"snapshot_id"`
+	ManifestHash      string      `json:"manifest_hash"`
+	ManifestSizeBytes int64       `json:"manifest_size_bytes"`
+	StorageKey        string      `json:"storage_key"`
+	Content           []byte      `json:"content"`
+}
+
+func (q *Queries) UpsertSnapshotManifest(ctx context.Context, arg UpsertSnapshotManifestParams) (SnapshotManifest, error) {
+	row := q.db.QueryRow(ctx, upsertSnapshotManifest,
+		arg.SnapshotID,
+		arg.ManifestHash,
+		arg.ManifestSizeBytes,
+		arg.StorageKey,
+		arg.Content,
+	)
+	var i SnapshotManifest
+	err := row.Scan(
+		&i.ID,
+		&i.SnapshotID,
+		&i.ManifestHash,
+		&i.ManifestSizeBytes,
+		&i.StorageKey,
+		&i.Content,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const upsertSnapshotObject = `-- name: UpsertSnapshotObject :one
+INSERT INTO snapshot_objects (snapshot_id, object_key, size_bytes, checksum, checksum_alg, part_index)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (snapshot_id, object_key)
+DO UPDATE SET size_bytes = EXCLUDED.size_bytes,
+              checksum = EXCLUDED.checksum,
+              checksum_alg = EXCLUDED.checksum_alg,
+              part_index = EXCLUDED.part_index
+RETURNING id, snapshot_id, object_key, size_bytes, checksum, checksum_alg, part_index, created_at
+`
+
+type UpsertSnapshotObjectParams struct {
+	SnapshotID  pgtype.UUID `json:"snapshot_id"`
+	ObjectKey   string      `json:"object_key"`
+	SizeBytes   int64       `json:"size_bytes"`
+	Checksum    string      `json:"checksum"`
+	ChecksumAlg string      `json:"checksum_alg"`
+	PartIndex   int32       `json:"part_index"`
+}
+
+func (q *Queries) UpsertSnapshotObject(ctx context.Context, arg UpsertSnapshotObjectParams) (SnapshotObject, error) {
+	row := q.db.QueryRow(ctx, upsertSnapshotObject,
+		arg.SnapshotID,
+		arg.ObjectKey,
+		arg.SizeBytes,
+		arg.Checksum,
+		arg.ChecksumAlg,
+		arg.PartIndex,
+	)
+	var i SnapshotObject
+	err := row.Scan(
+		&i.ID,
+		&i.SnapshotID,
+		&i.ObjectKey,
+		&i.SizeBytes,
+		&i.Checksum,
+		&i.ChecksumAlg,
+		&i.PartIndex,
+		&i.CreatedAt,
 	)
 	return i, err
 }

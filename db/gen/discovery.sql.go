@@ -24,6 +24,19 @@ func (q *Queries) DeleteAgentResources(ctx context.Context, arg DeleteAgentResou
 	return err
 }
 
+const deleteDiscoveredResource = `-- name: DeleteDiscoveredResource :exec
+DELETE FROM discovered_resources WHERE id = $1
+`
+
+type DeleteDiscoveredResourceParams struct {
+	ID pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) DeleteDiscoveredResource(ctx context.Context, arg DeleteDiscoveredResourceParams) error {
+	_, err := q.db.Exec(ctx, deleteDiscoveredResource, arg.ID)
+	return err
+}
+
 const deleteStaleResources = `-- name: DeleteStaleResources :execrows
 DELETE FROM discovered_resources WHERE agent_id = $1 AND last_seen_at < $2
 `

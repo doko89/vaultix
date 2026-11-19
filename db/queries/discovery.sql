@@ -31,3 +31,6 @@ DELETE FROM discovered_resources WHERE agent_id = $1 AND last_seen_at < $2;
 
 -- name: DeleteAgentResources :exec
 DELETE FROM discovered_resources WHERE agent_id = $1;
+
+-- name: DeleteDiscoveredResource :exec
+DELETE FROM discovered_resources WHERE id = $1;
