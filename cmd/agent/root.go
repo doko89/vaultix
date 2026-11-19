@@ -147,12 +147,49 @@ func newRunCommand(configPath *string) *cobra.Command {
 			}
 
 			mgr := agent.NewHTTPManagerClient(cfg.ManagerURL, cfg.Token, cfg.RequestTimeout)
-			runner := &agent.HeartbeatRunner{Client: mgr, Config: cfg, Version: version, Logger: log}
+			hb := &agent.HeartbeatRunner{Client: mgr, Config: cfg, Version: version, Logger: log}
+
+			var lister agent.DockerLister
+			if cfg.DockerEnabled {
+				cli, err := agent.NewMobyClient(cfg.DockerHost)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = cli.Close() }()
+				lister = cli
+			}
+			var resolver agent.VolumeResolver
+			if lister != nil {
+				resolver = &agent.DockerVolumeResolver{Lister: lister}
+			}
+			work := &agent.Runner{
+				Client:   mgr,
+				Config:   cfg,
+				Store:    store,
+				Executor: &agent.Executor{WorkDir: cfg.WorkDir, CompressionLevel: cfg.CompressionLevel, VolumeResolver: resolver},
+				Uploader: &agent.Uploader{Manager: mgr},
+				Restorer: &agent.Restorer{Manager: mgr, WorkDir: cfg.WorkDir},
+				Logger:   log,
+			}
+			if err := work.Validate(); err != nil {
+				return err
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
-			log.Info("heartbeat loop started", "interval", cfg.HeartbeatInterval.String())
-			if err := runner.Run(ctx); err != nil {
-				return err
+			log.Info("agent loops started",
+				"heartbeat", cfg.HeartbeatInterval.String(),
+				"poll", cfg.PollInterval.String(),
+				"restore_poll", cfg.RestorePollInterval.String())
+			errCh := make(chan error, 3)
+			go func() { errCh <- hb.Run(ctx) }()
+			go func() { errCh <- work.RunBackupLoop(ctx) }()
+			go func() { errCh <- work.RunRestoreLoop(ctx) }()
+			// The loops only return on shutdown; surface the first error.
+			for range 3 {
+				if err := <-errCh; err != nil {
+					stop()
+					log.Error("agent loop exited with error", "error", err)
+				}
 			}
 			log.Info("agent stopped")
 			return nil

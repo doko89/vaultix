@@ -66,10 +66,11 @@ func (r *HeartbeatRunner) Beat(ctx context.Context) (HeartbeatResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.Config.RequestTimeout)
 	defer cancel()
 	return r.Client.Heartbeat(ctx, HeartbeatRequest{
-		AgentID:  r.Config.AgentID,
-		Hostname: hostname,
-		Version:  r.Version,
-		At:       time.Now().UTC(),
+		AgentID:         r.Config.AgentID,
+		Hostname:        hostname,
+		Version:         r.Version,
+		DockerAvailable: r.Config.DockerEnabled,
+		At:              time.Now().UTC(),
 	})
 }
 
