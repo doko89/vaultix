@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAuditEventsFiltered = `-- name: CountAuditEventsFiltered :one
+SELECT count(*) FROM audit_logs
+WHERE ($1::uuid IS NULL OR actor_id = $1)
+  AND ($2 = '' OR action = $2)
+  AND ($3::timestamptz IS NULL OR created_at >= $3)
+  AND ($4::timestamptz IS NULL OR created_at <= $4)
+`
+
+type CountAuditEventsFilteredParams struct {
+	Column1 pgtype.UUID        `json:"column_1"`
+	Column2 interface{}        `json:"column_2"`
+	Column3 pgtype.Timestamptz `json:"column_3"`
+	Column4 pgtype.Timestamptz `json:"column_4"`
+}
+
+func (q *Queries) CountAuditEventsFiltered(ctx context.Context, arg CountAuditEventsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditEventsFiltered,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Column4,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAuditEvent = `-- name: CreateAuditEvent :one
 
 INSERT INTO audit_logs (actor_id, actor_type, actor_label, action, target_type, target_id, outcome, ip_address, details)
@@ -211,6 +238,64 @@ func (q *Queries) ListAuditEventsByTarget(ctx context.Context, arg ListAuditEven
 	rows, err := q.db.Query(ctx, listAuditEventsByTarget,
 		arg.TargetType,
 		arg.TargetID,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditLog{}
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorID,
+			&i.ActorType,
+			&i.ActorLabel,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.Outcome,
+			&i.IpAddress,
+			&i.Details,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEventsFiltered = `-- name: ListAuditEventsFiltered :many
+SELECT id, actor_id, actor_type, actor_label, action, target_type, target_id, outcome, ip_address, details, created_at FROM audit_logs
+WHERE ($1::uuid IS NULL OR actor_id = $1)
+  AND ($2 = '' OR action = $2)
+  AND ($3::timestamptz IS NULL OR created_at >= $3)
+  AND ($4::timestamptz IS NULL OR created_at <= $4)
+ORDER BY created_at DESC
+LIMIT $5 OFFSET $6
+`
+
+type ListAuditEventsFilteredParams struct {
+	Column1 pgtype.UUID        `json:"column_1"`
+	Column2 interface{}        `json:"column_2"`
+	Column3 pgtype.Timestamptz `json:"column_3"`
+	Column4 pgtype.Timestamptz `json:"column_4"`
+	Limit   int32              `json:"limit"`
+	Offset  int32              `json:"offset"`
+}
+
+func (q *Queries) ListAuditEventsFiltered(ctx context.Context, arg ListAuditEventsFilteredParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditEventsFiltered,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Column4,
 		arg.Limit,
 		arg.Offset,
 	)

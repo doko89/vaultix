@@ -24,3 +24,9 @@ UPDATE notifications SET state = 'failed', attempts = attempts + 1, last_error =
 UPDATE notifications
 SET state = 'pending', attempts = attempts + 1, last_error = $2, scheduled_at = $3
 WHERE id = $1;
+
+-- name: UpdateNotification :exec
+UPDATE notifications
+SET recipient = $2, subject = $3, body = $4, state = $5,
+    attempts = $6, last_error = $7, sent_at = $8
+WHERE id = $1;

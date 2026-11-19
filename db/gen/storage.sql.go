@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearDefaultStorageDestinations = `-- name: ClearDefaultStorageDestinations :exec
+UPDATE storage_destinations SET is_default = FALSE, updated_at = now() WHERE is_default
+`
+
+func (q *Queries) ClearDefaultStorageDestinations(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, clearDefaultStorageDestinations)
+	return err
+}
+
 const createSecretProfile = `-- name: CreateSecretProfile :one
 INSERT INTO secret_profiles (name, owner_type, secret_encrypted, key_reference, description, created_by)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -131,6 +140,31 @@ type DeleteStorageDestinationParams struct {
 func (q *Queries) DeleteStorageDestination(ctx context.Context, arg DeleteStorageDestinationParams) error {
 	_, err := q.db.Exec(ctx, deleteStorageDestination, arg.ID)
 	return err
+}
+
+const getDefaultStorageDestination = `-- name: GetDefaultStorageDestination :one
+SELECT id, name, endpoint, region, bucket, prefix, auth, is_default, is_enabled, last_tested_at, last_test_ok, created_at, updated_at FROM storage_destinations WHERE is_default ORDER BY name ASC LIMIT 1
+`
+
+func (q *Queries) GetDefaultStorageDestination(ctx context.Context) (StorageDestination, error) {
+	row := q.db.QueryRow(ctx, getDefaultStorageDestination)
+	var i StorageDestination
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Endpoint,
+		&i.Region,
+		&i.Bucket,
+		&i.Prefix,
+		&i.Auth,
+		&i.IsDefault,
+		&i.IsEnabled,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getSecretProfile = `-- name: GetSecretProfile :one
@@ -394,4 +428,55 @@ type SetStorageEnabledParams struct {
 func (q *Queries) SetStorageEnabled(ctx context.Context, arg SetStorageEnabledParams) error {
 	_, err := q.db.Exec(ctx, setStorageEnabled, arg.ID, arg.IsEnabled)
 	return err
+}
+
+const updateStorageDestination = `-- name: UpdateStorageDestination :one
+UPDATE storage_destinations
+SET name = $2, endpoint = $3, region = $4, bucket = $5, prefix = $6,
+    auth = $7, is_default = $8, is_enabled = $9, updated_at = now()
+WHERE id = $1
+RETURNING id, name, endpoint, region, bucket, prefix, auth, is_default, is_enabled, last_tested_at, last_test_ok, created_at, updated_at
+`
+
+type UpdateStorageDestinationParams struct {
+	ID        pgtype.UUID `json:"id"`
+	Name      string      `json:"name"`
+	Endpoint  string      `json:"endpoint"`
+	Region    string      `json:"region"`
+	Bucket    string      `json:"bucket"`
+	Prefix    string      `json:"prefix"`
+	Auth      []byte      `json:"auth"`
+	IsDefault bool        `json:"is_default"`
+	IsEnabled bool        `json:"is_enabled"`
+}
+
+func (q *Queries) UpdateStorageDestination(ctx context.Context, arg UpdateStorageDestinationParams) (StorageDestination, error) {
+	row := q.db.QueryRow(ctx, updateStorageDestination,
+		arg.ID,
+		arg.Name,
+		arg.Endpoint,
+		arg.Region,
+		arg.Bucket,
+		arg.Prefix,
+		arg.Auth,
+		arg.IsDefault,
+		arg.IsEnabled,
+	)
+	var i StorageDestination
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Endpoint,
+		&i.Region,
+		&i.Bucket,
+		&i.Prefix,
+		&i.Auth,
+		&i.IsDefault,
+		&i.IsEnabled,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

@@ -151,6 +151,33 @@ func (q *Queries) DeleteProvider(ctx context.Context, arg DeleteProviderParams) 
 	return err
 }
 
+const getIdentityByID = `-- name: GetIdentityByID :one
+SELECT id, user_id, provider_id, issuer, subject, email, claims, is_disabled, last_login_at, created_at, updated_at FROM user_external_identities WHERE id = $1
+`
+
+type GetIdentityByIDParams struct {
+	ID pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) GetIdentityByID(ctx context.Context, arg GetIdentityByIDParams) (UserExternalIdentity, error) {
+	row := q.db.QueryRow(ctx, getIdentityByID, arg.ID)
+	var i UserExternalIdentity
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ProviderID,
+		&i.Issuer,
+		&i.Subject,
+		&i.Email,
+		&i.Claims,
+		&i.IsDisabled,
+		&i.LastLoginAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getIdentityByIssuerSubject = `-- name: GetIdentityByIssuerSubject :one
 SELECT id, user_id, provider_id, issuer, subject, email, claims, is_disabled, last_login_at, created_at, updated_at FROM user_external_identities WHERE issuer = $1 AND subject = $2
 `
@@ -213,6 +240,54 @@ type GetProviderByIDRow struct {
 func (q *Queries) GetProviderByID(ctx context.Context, arg GetProviderByIDParams) (GetProviderByIDRow, error) {
 	row := q.db.QueryRow(ctx, getProviderByID, arg.ID)
 	var i GetProviderByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Issuer,
+		&i.DiscoveryUrl,
+		&i.Endpoints,
+		&i.ClientID,
+		&i.Scopes,
+		&i.ClaimsMapping,
+		&i.DefaultRoleID,
+		&i.IsEnabled,
+		&i.AllowJitProvisioning,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getProviderByIssuer = `-- name: GetProviderByIssuer :one
+SELECT id, name, issuer, discovery_url, endpoints, client_id,
+       scopes, claims_mapping, default_role_id, is_enabled,
+       allow_jit_provisioning, created_at, updated_at
+FROM oidc_providers WHERE issuer = $1
+`
+
+type GetProviderByIssuerParams struct {
+	Issuer string `json:"issuer"`
+}
+
+type GetProviderByIssuerRow struct {
+	ID                   pgtype.UUID        `json:"id"`
+	Name                 string             `json:"name"`
+	Issuer               string             `json:"issuer"`
+	DiscoveryUrl         pgtype.Text        `json:"discovery_url"`
+	Endpoints            []byte             `json:"endpoints"`
+	ClientID             string             `json:"client_id"`
+	Scopes               string             `json:"scopes"`
+	ClaimsMapping        []byte             `json:"claims_mapping"`
+	DefaultRoleID        pgtype.UUID        `json:"default_role_id"`
+	IsEnabled            bool               `json:"is_enabled"`
+	AllowJitProvisioning bool               `json:"allow_jit_provisioning"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetProviderByIssuer(ctx context.Context, arg GetProviderByIssuerParams) (GetProviderByIssuerRow, error) {
+	row := q.db.QueryRow(ctx, getProviderByIssuer, arg.Issuer)
+	var i GetProviderByIssuerRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -476,6 +551,46 @@ func (q *Queries) SetProviderEnabled(ctx context.Context, arg SetProviderEnabled
 	return err
 }
 
+const updateIdentity = `-- name: UpdateIdentity :one
+UPDATE user_external_identities
+SET email = $2, claims = $3, is_disabled = $4, last_login_at = $5, updated_at = now()
+WHERE id = $1
+RETURNING id, user_id, provider_id, issuer, subject, email, claims, is_disabled, last_login_at, created_at, updated_at
+`
+
+type UpdateIdentityParams struct {
+	ID          pgtype.UUID        `json:"id"`
+	Email       string             `json:"email"`
+	Claims      []byte             `json:"claims"`
+	IsDisabled  bool               `json:"is_disabled"`
+	LastLoginAt pgtype.Timestamptz `json:"last_login_at"`
+}
+
+func (q *Queries) UpdateIdentity(ctx context.Context, arg UpdateIdentityParams) (UserExternalIdentity, error) {
+	row := q.db.QueryRow(ctx, updateIdentity,
+		arg.ID,
+		arg.Email,
+		arg.Claims,
+		arg.IsDisabled,
+		arg.LastLoginAt,
+	)
+	var i UserExternalIdentity
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ProviderID,
+		&i.Issuer,
+		&i.Subject,
+		&i.Email,
+		&i.Claims,
+		&i.IsDisabled,
+		&i.LastLoginAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateIdentityLogin = `-- name: UpdateIdentityLogin :exec
 UPDATE user_external_identities
 SET last_login_at = now(), claims = $2, updated_at = now()
@@ -490,4 +605,81 @@ type UpdateIdentityLoginParams struct {
 func (q *Queries) UpdateIdentityLogin(ctx context.Context, arg UpdateIdentityLoginParams) error {
 	_, err := q.db.Exec(ctx, updateIdentityLogin, arg.ID, arg.Claims)
 	return err
+}
+
+const updateProvider = `-- name: UpdateProvider :one
+UPDATE oidc_providers
+SET name = $2, issuer = $3, discovery_url = $4, endpoints = $5,
+    client_id = $6, client_secret_encrypted = $7, scopes = $8,
+    claims_mapping = $9, default_role_id = $10, is_enabled = $11,
+    allow_jit_provisioning = $12, updated_at = now()
+WHERE id = $1
+RETURNING id, name, issuer, discovery_url, endpoints, client_id,
+    scopes, claims_mapping, default_role_id, is_enabled,
+    allow_jit_provisioning, created_at, updated_at
+`
+
+type UpdateProviderParams struct {
+	ID                    pgtype.UUID `json:"id"`
+	Name                  string      `json:"name"`
+	Issuer                string      `json:"issuer"`
+	DiscoveryUrl          pgtype.Text `json:"discovery_url"`
+	Endpoints             []byte      `json:"endpoints"`
+	ClientID              string      `json:"client_id"`
+	ClientSecretEncrypted pgtype.Text `json:"client_secret_encrypted"`
+	Scopes                string      `json:"scopes"`
+	ClaimsMapping         []byte      `json:"claims_mapping"`
+	DefaultRoleID         pgtype.UUID `json:"default_role_id"`
+	IsEnabled             bool        `json:"is_enabled"`
+	AllowJitProvisioning  bool        `json:"allow_jit_provisioning"`
+}
+
+type UpdateProviderRow struct {
+	ID                   pgtype.UUID        `json:"id"`
+	Name                 string             `json:"name"`
+	Issuer               string             `json:"issuer"`
+	DiscoveryUrl         pgtype.Text        `json:"discovery_url"`
+	Endpoints            []byte             `json:"endpoints"`
+	ClientID             string             `json:"client_id"`
+	Scopes               string             `json:"scopes"`
+	ClaimsMapping        []byte             `json:"claims_mapping"`
+	DefaultRoleID        pgtype.UUID        `json:"default_role_id"`
+	IsEnabled            bool               `json:"is_enabled"`
+	AllowJitProvisioning bool               `json:"allow_jit_provisioning"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) (UpdateProviderRow, error) {
+	row := q.db.QueryRow(ctx, updateProvider,
+		arg.ID,
+		arg.Name,
+		arg.Issuer,
+		arg.DiscoveryUrl,
+		arg.Endpoints,
+		arg.ClientID,
+		arg.ClientSecretEncrypted,
+		arg.Scopes,
+		arg.ClaimsMapping,
+		arg.DefaultRoleID,
+		arg.IsEnabled,
+		arg.AllowJitProvisioning,
+	)
+	var i UpdateProviderRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Issuer,
+		&i.DiscoveryUrl,
+		&i.Endpoints,
+		&i.ClientID,
+		&i.Scopes,
+		&i.ClaimsMapping,
+		&i.DefaultRoleID,
+		&i.IsEnabled,
+		&i.AllowJitProvisioning,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

@@ -65,3 +65,27 @@ DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2;
 
 -- name: RevokeAllUserRoles :exec
 DELETE FROM user_roles WHERE user_id = $1;
+
+-- name: UpdateUser :one
+UPDATE users
+SET email = $2,
+    password_hash = $3,
+    display_name = $4,
+    is_active = $5,
+    disabled_at = CASE WHEN $5 THEN NULL ELSE coalesce(disabled_at, now()) END,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: CountUsers :one
+SELECT count(*) FROM users;
+
+-- name: SearchUsers :many
+SELECT * FROM users
+WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR display_name ILIKE '%' || $1 || '%')
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountSearchUsers :one
+SELECT count(*) FROM users
+WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR display_name ILIKE '%' || $1 || '%');

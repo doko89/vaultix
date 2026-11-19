@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAgents = `-- name: CountAgents :one
+SELECT count(*) FROM agents
+`
+
+func (q *Queries) CountAgents(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgents)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSearchAgents = `-- name: CountSearchAgents :one
+SELECT count(*) FROM agents
+WHERE ($1 = '' OR hostname ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
+`
+
+type CountSearchAgentsParams struct {
+	Column1 interface{} `json:"column_1"`
+}
+
+func (q *Queries) CountSearchAgents(ctx context.Context, arg CountSearchAgentsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSearchAgents, arg.Column1)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAgent = `-- name: CreateAgent :one
 INSERT INTO agents (name, hostname, ip_address, os, arch, enrollment_token_hash)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -171,6 +198,31 @@ func (q *Queries) GetAgentByID(ctx context.Context, arg GetAgentByIDParams) (Age
 	return i, err
 }
 
+const getCredentialByHash = `-- name: GetCredentialByHash :one
+SELECT id, agent_id, credential_hash, label, issued_at, expires_at, revoked_at, last_used_at, created_at FROM agent_credentials WHERE credential_hash = $1
+`
+
+type GetCredentialByHashParams struct {
+	CredentialHash string `json:"credential_hash"`
+}
+
+func (q *Queries) GetCredentialByHash(ctx context.Context, arg GetCredentialByHashParams) (AgentCredential, error) {
+	row := q.db.QueryRow(ctx, getCredentialByHash, arg.CredentialHash)
+	var i AgentCredential
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.CredentialHash,
+		&i.Label,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getLatestHeartbeat = `-- name: GetLatestHeartbeat :one
 SELECT id, agent_id, received_at, status, agent_version, ip_address, disk_total_bytes, disk_free_bytes, running_jobs, payload FROM agent_heartbeats
 WHERE agent_id = $1
@@ -212,6 +264,46 @@ type ListActiveAgentCredentialsParams struct {
 
 func (q *Queries) ListActiveAgentCredentials(ctx context.Context, arg ListActiveAgentCredentialsParams) ([]AgentCredential, error) {
 	rows, err := q.db.Query(ctx, listActiveAgentCredentials, arg.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentCredential{}
+	for rows.Next() {
+		var i AgentCredential
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.CredentialHash,
+			&i.Label,
+			&i.IssuedAt,
+			&i.ExpiresAt,
+			&i.RevokedAt,
+			&i.LastUsedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentCredentials = `-- name: ListAgentCredentials :many
+SELECT id, agent_id, credential_hash, label, issued_at, expires_at, revoked_at, last_used_at, created_at FROM agent_credentials
+WHERE agent_id = $1
+ORDER BY issued_at DESC
+`
+
+type ListAgentCredentialsParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) ListAgentCredentials(ctx context.Context, arg ListAgentCredentialsParams) ([]AgentCredential, error) {
+	rows, err := q.db.Query(ctx, listAgentCredentials, arg.AgentID)
 	if err != nil {
 		return nil, err
 	}
@@ -485,6 +577,55 @@ func (q *Queries) RevokeAllAgentCredentials(ctx context.Context, arg RevokeAllAg
 	return err
 }
 
+const searchAgents = `-- name: SearchAgents :many
+SELECT id, name, hostname, ip_address, os, arch, agent_version, status, enrollment_token_hash, enrolled_at, last_heartbeat_at, capabilities, metadata, created_at, updated_at FROM agents
+WHERE ($1 = '' OR hostname ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type SearchAgentsParams struct {
+	Column1 interface{} `json:"column_1"`
+	Limit   int32       `json:"limit"`
+	Offset  int32       `json:"offset"`
+}
+
+func (q *Queries) SearchAgents(ctx context.Context, arg SearchAgentsParams) ([]Agent, error) {
+	rows, err := q.db.Query(ctx, searchAgents, arg.Column1, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Agent{}
+	for rows.Next() {
+		var i Agent
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Hostname,
+			&i.IpAddress,
+			&i.Os,
+			&i.Arch,
+			&i.AgentVersion,
+			&i.Status,
+			&i.EnrollmentTokenHash,
+			&i.EnrolledAt,
+			&i.LastHeartbeatAt,
+			&i.Capabilities,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setAgentStatus = `-- name: SetAgentStatus :one
 UPDATE agents SET status = $2, updated_at = now()
 WHERE id = $1
@@ -532,6 +673,103 @@ func (q *Queries) TouchCredentialUsed(ctx context.Context, arg TouchCredentialUs
 	return err
 }
 
+const updateAgent = `-- name: UpdateAgent :one
+UPDATE agents
+SET name = $2, hostname = $3, ip_address = $4, os = $5, arch = $6,
+    agent_version = $7, status = $8, capabilities = $9, metadata = $10,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, hostname, ip_address, os, arch, agent_version, status, enrollment_token_hash, enrolled_at, last_heartbeat_at, capabilities, metadata, created_at, updated_at
+`
+
+type UpdateAgentParams struct {
+	ID           pgtype.UUID `json:"id"`
+	Name         string      `json:"name"`
+	Hostname     string      `json:"hostname"`
+	IpAddress    string      `json:"ip_address"`
+	Os           string      `json:"os"`
+	Arch         string      `json:"arch"`
+	AgentVersion string      `json:"agent_version"`
+	Status       string      `json:"status"`
+	Capabilities []byte      `json:"capabilities"`
+	Metadata     []byte      `json:"metadata"`
+}
+
+func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, updateAgent,
+		arg.ID,
+		arg.Name,
+		arg.Hostname,
+		arg.IpAddress,
+		arg.Os,
+		arg.Arch,
+		arg.AgentVersion,
+		arg.Status,
+		arg.Capabilities,
+		arg.Metadata,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Hostname,
+		&i.IpAddress,
+		&i.Os,
+		&i.Arch,
+		&i.AgentVersion,
+		&i.Status,
+		&i.EnrollmentTokenHash,
+		&i.EnrolledAt,
+		&i.LastHeartbeatAt,
+		&i.Capabilities,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateAgentCredential = `-- name: UpdateAgentCredential :one
+UPDATE agent_credentials
+SET label = $2,
+    expires_at = $3,
+    revoked_at = CASE WHEN $4::bool THEN coalesce(revoked_at, now()) ELSE NULL END,
+    last_used_at = COALESCE($5, last_used_at)
+WHERE id = $1
+RETURNING id, agent_id, credential_hash, label, issued_at, expires_at, revoked_at, last_used_at, created_at
+`
+
+type UpdateAgentCredentialParams struct {
+	ID         pgtype.UUID        `json:"id"`
+	Label      string             `json:"label"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	Column4    bool               `json:"column_4"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+}
+
+func (q *Queries) UpdateAgentCredential(ctx context.Context, arg UpdateAgentCredentialParams) (AgentCredential, error) {
+	row := q.db.QueryRow(ctx, updateAgentCredential,
+		arg.ID,
+		arg.Label,
+		arg.ExpiresAt,
+		arg.Column4,
+		arg.LastUsedAt,
+	)
+	var i AgentCredential
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.CredentialHash,
+		&i.Label,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const updateAgentHeartbeatPointer = `-- name: UpdateAgentHeartbeatPointer :exec
 UPDATE agents
 SET last_heartbeat_at = now(), ip_address = $2, agent_version = $3,
@@ -548,6 +786,22 @@ type UpdateAgentHeartbeatPointerParams struct {
 
 func (q *Queries) UpdateAgentHeartbeatPointer(ctx context.Context, arg UpdateAgentHeartbeatPointerParams) error {
 	_, err := q.db.Exec(ctx, updateAgentHeartbeatPointer, arg.ID, arg.IpAddress, arg.AgentVersion)
+	return err
+}
+
+const updateAgentHeartbeatStats = `-- name: UpdateAgentHeartbeatStats :exec
+UPDATE agents
+SET metadata = coalesce(metadata, '{}'::jsonb) || $2::jsonb, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateAgentHeartbeatStatsParams struct {
+	ID      pgtype.UUID `json:"id"`
+	Column2 []byte      `json:"column_2"`
+}
+
+func (q *Queries) UpdateAgentHeartbeatStats(ctx context.Context, arg UpdateAgentHeartbeatStatsParams) error {
+	_, err := q.db.Exec(ctx, updateAgentHeartbeatStats, arg.ID, arg.Column2)
 	return err
 }
 

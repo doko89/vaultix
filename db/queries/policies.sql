@@ -72,3 +72,25 @@ DELETE FROM backup_policy_targets WHERE id = $1;
 
 -- name: DeletePolicyTargets :exec
 DELETE FROM backup_policy_targets WHERE policy_id = $1;
+
+-- name: UpdatePolicy :one
+UPDATE backup_policies
+SET name = $2, description = $3, agent_id = $4,
+    storage_destination_id = $5, compression = $6, compression_level = $7,
+    encryption_enabled = $8, encryption_key_reference = $9,
+    is_enabled = $10, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: CountPolicies :one
+SELECT count(*) FROM backup_policies;
+
+-- name: SearchPolicies :many
+SELECT * FROM backup_policies
+WHERE ($1 = '' OR name ILIKE '%' || $1 || '%')
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountSearchPolicies :one
+SELECT count(*) FROM backup_policies
+WHERE ($1 = '' OR name ILIKE '%' || $1 || '%');

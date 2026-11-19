@@ -83,3 +83,46 @@ LIMIT $2;
 
 -- name: DeleteOldHeartbeats :execrows
 DELETE FROM agent_heartbeats WHERE received_at < $1;
+
+-- name: UpdateAgent :one
+UPDATE agents
+SET name = $2, hostname = $3, ip_address = $4, os = $5, arch = $6,
+    agent_version = $7, status = $8, capabilities = $9, metadata = $10,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: CountAgents :one
+SELECT count(*) FROM agents;
+
+-- name: SearchAgents :many
+SELECT * FROM agents
+WHERE ($1 = '' OR hostname ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountSearchAgents :one
+SELECT count(*) FROM agents
+WHERE ($1 = '' OR hostname ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%');
+
+-- name: GetCredentialByHash :one
+SELECT * FROM agent_credentials WHERE credential_hash = $1;
+
+-- name: ListAgentCredentials :many
+SELECT * FROM agent_credentials
+WHERE agent_id = $1
+ORDER BY issued_at DESC;
+
+-- name: UpdateAgentCredential :one
+UPDATE agent_credentials
+SET label = $2,
+    expires_at = $3,
+    revoked_at = CASE WHEN $4::bool THEN coalesce(revoked_at, now()) ELSE NULL END,
+    last_used_at = COALESCE($5, last_used_at)
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateAgentHeartbeatStats :exec
+UPDATE agents
+SET metadata = coalesce(metadata, '{}'::jsonb) || $2::jsonb, updated_at = now()
+WHERE id = $1;

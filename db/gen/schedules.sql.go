@@ -149,6 +149,52 @@ func (q *Queries) ListDueSchedules(ctx context.Context, arg ListDueSchedulesPara
 	return items, nil
 }
 
+const listDueSchedulesBefore = `-- name: ListDueSchedulesBefore :many
+SELECT id, policy_id, name, schedule_type, cron_expression, interval_minutes, timezone, next_run_at, last_run_at, is_paused, concurrency_limit, created_at, updated_at FROM schedules
+WHERE NOT is_paused AND next_run_at IS NOT NULL AND next_run_at <= $1
+ORDER BY next_run_at ASC
+LIMIT $2
+`
+
+type ListDueSchedulesBeforeParams struct {
+	NextRunAt pgtype.Timestamptz `json:"next_run_at"`
+	Limit     int32              `json:"limit"`
+}
+
+func (q *Queries) ListDueSchedulesBefore(ctx context.Context, arg ListDueSchedulesBeforeParams) ([]Schedule, error) {
+	rows, err := q.db.Query(ctx, listDueSchedulesBefore, arg.NextRunAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Schedule{}
+	for rows.Next() {
+		var i Schedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.PolicyID,
+			&i.Name,
+			&i.ScheduleType,
+			&i.CronExpression,
+			&i.IntervalMinutes,
+			&i.Timezone,
+			&i.NextRunAt,
+			&i.LastRunAt,
+			&i.IsPaused,
+			&i.ConcurrencyLimit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSchedulesByPolicy = `-- name: ListSchedulesByPolicy :many
 SELECT id, policy_id, name, schedule_type, cron_expression, interval_minutes, timezone, next_run_at, last_run_at, is_paused, concurrency_limit, created_at, updated_at FROM schedules WHERE policy_id = $1 ORDER BY created_at ASC
 `
@@ -219,6 +265,56 @@ type SetSchedulePausedParams struct {
 
 func (q *Queries) SetSchedulePaused(ctx context.Context, arg SetSchedulePausedParams) (Schedule, error) {
 	row := q.db.QueryRow(ctx, setSchedulePaused, arg.ID, arg.IsPaused)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.PolicyID,
+		&i.Name,
+		&i.ScheduleType,
+		&i.CronExpression,
+		&i.IntervalMinutes,
+		&i.Timezone,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.IsPaused,
+		&i.ConcurrencyLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateSchedule = `-- name: UpdateSchedule :one
+UPDATE schedules
+SET schedule_type = $2, cron_expression = $3, interval_minutes = $4,
+    timezone = $5, next_run_at = $6, is_paused = $7, concurrency_limit = $8,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, policy_id, name, schedule_type, cron_expression, interval_minutes, timezone, next_run_at, last_run_at, is_paused, concurrency_limit, created_at, updated_at
+`
+
+type UpdateScheduleParams struct {
+	ID               pgtype.UUID        `json:"id"`
+	ScheduleType     string             `json:"schedule_type"`
+	CronExpression   pgtype.Text        `json:"cron_expression"`
+	IntervalMinutes  pgtype.Int4        `json:"interval_minutes"`
+	Timezone         string             `json:"timezone"`
+	NextRunAt        pgtype.Timestamptz `json:"next_run_at"`
+	IsPaused         bool               `json:"is_paused"`
+	ConcurrencyLimit int32              `json:"concurrency_limit"`
+}
+
+func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) (Schedule, error) {
+	row := q.db.QueryRow(ctx, updateSchedule,
+		arg.ID,
+		arg.ScheduleType,
+		arg.CronExpression,
+		arg.IntervalMinutes,
+		arg.Timezone,
+		arg.NextRunAt,
+		arg.IsPaused,
+		arg.ConcurrencyLimit,
+	)
 	var i Schedule
 	err := row.Scan(
 		&i.ID,

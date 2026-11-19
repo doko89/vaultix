@@ -77,6 +77,33 @@ func (q *Queries) BumpPolicyVersion(ctx context.Context, arg BumpPolicyVersionPa
 	return i, err
 }
 
+const countPolicies = `-- name: CountPolicies :one
+SELECT count(*) FROM backup_policies
+`
+
+func (q *Queries) CountPolicies(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countPolicies)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSearchPolicies = `-- name: CountSearchPolicies :one
+SELECT count(*) FROM backup_policies
+WHERE ($1 = '' OR name ILIKE '%' || $1 || '%')
+`
+
+type CountSearchPoliciesParams struct {
+	Column1 interface{} `json:"column_1"`
+}
+
+func (q *Queries) CountSearchPolicies(ctx context.Context, arg CountSearchPoliciesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSearchPolicies, arg.Column1)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createPolicy = `-- name: CreatePolicy :one
 INSERT INTO backup_policies (
     name, description, agent_id, storage_destination_id, secret_profile_id,
@@ -526,6 +553,55 @@ func (q *Queries) ListPolicyVersions(ctx context.Context, arg ListPolicyVersions
 	return items, nil
 }
 
+const searchPolicies = `-- name: SearchPolicies :many
+SELECT id, name, description, agent_id, storage_destination_id, secret_profile_id, compression, compression_level, encryption_enabled, encryption_key_reference, is_enabled, current_version, created_by, created_at, updated_at FROM backup_policies
+WHERE ($1 = '' OR name ILIKE '%' || $1 || '%')
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type SearchPoliciesParams struct {
+	Column1 interface{} `json:"column_1"`
+	Limit   int32       `json:"limit"`
+	Offset  int32       `json:"offset"`
+}
+
+func (q *Queries) SearchPolicies(ctx context.Context, arg SearchPoliciesParams) ([]BackupPolicy, error) {
+	rows, err := q.db.Query(ctx, searchPolicies, arg.Column1, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BackupPolicy{}
+	for rows.Next() {
+		var i BackupPolicy
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.AgentID,
+			&i.StorageDestinationID,
+			&i.SecretProfileID,
+			&i.Compression,
+			&i.CompressionLevel,
+			&i.EncryptionEnabled,
+			&i.EncryptionKeyReference,
+			&i.IsEnabled,
+			&i.CurrentVersion,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setPolicyEnabled = `-- name: SetPolicyEnabled :one
 UPDATE backup_policies SET is_enabled = $2, updated_at = now()
 WHERE id = $1
@@ -539,6 +615,63 @@ type SetPolicyEnabledParams struct {
 
 func (q *Queries) SetPolicyEnabled(ctx context.Context, arg SetPolicyEnabledParams) (BackupPolicy, error) {
 	row := q.db.QueryRow(ctx, setPolicyEnabled, arg.ID, arg.IsEnabled)
+	var i BackupPolicy
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.AgentID,
+		&i.StorageDestinationID,
+		&i.SecretProfileID,
+		&i.Compression,
+		&i.CompressionLevel,
+		&i.EncryptionEnabled,
+		&i.EncryptionKeyReference,
+		&i.IsEnabled,
+		&i.CurrentVersion,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updatePolicy = `-- name: UpdatePolicy :one
+UPDATE backup_policies
+SET name = $2, description = $3, agent_id = $4,
+    storage_destination_id = $5, compression = $6, compression_level = $7,
+    encryption_enabled = $8, encryption_key_reference = $9,
+    is_enabled = $10, updated_at = now()
+WHERE id = $1
+RETURNING id, name, description, agent_id, storage_destination_id, secret_profile_id, compression, compression_level, encryption_enabled, encryption_key_reference, is_enabled, current_version, created_by, created_at, updated_at
+`
+
+type UpdatePolicyParams struct {
+	ID                     pgtype.UUID `json:"id"`
+	Name                   string      `json:"name"`
+	Description            string      `json:"description"`
+	AgentID                pgtype.UUID `json:"agent_id"`
+	StorageDestinationID   pgtype.UUID `json:"storage_destination_id"`
+	Compression            string      `json:"compression"`
+	CompressionLevel       int32       `json:"compression_level"`
+	EncryptionEnabled      bool        `json:"encryption_enabled"`
+	EncryptionKeyReference string      `json:"encryption_key_reference"`
+	IsEnabled              bool        `json:"is_enabled"`
+}
+
+func (q *Queries) UpdatePolicy(ctx context.Context, arg UpdatePolicyParams) (BackupPolicy, error) {
+	row := q.db.QueryRow(ctx, updatePolicy,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.AgentID,
+		arg.StorageDestinationID,
+		arg.Compression,
+		arg.CompressionLevel,
+		arg.EncryptionEnabled,
+		arg.EncryptionKeyReference,
+		arg.IsEnabled,
+	)
 	var i BackupPolicy
 	err := row.Scan(
 		&i.ID,

@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSearchUsers = `-- name: CountSearchUsers :one
+SELECT count(*) FROM users
+WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR display_name ILIKE '%' || $1 || '%')
+`
+
+type CountSearchUsersParams struct {
+	Column1 interface{} `json:"column_1"`
+}
+
+func (q *Queries) CountSearchUsers(ctx context.Context, arg CountSearchUsersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSearchUsers, arg.Column1)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUsers = `-- name: CountUsers :one
+SELECT count(*) FROM users
+`
+
+func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, display_name)
 VALUES ($1, $2, $3)
@@ -332,6 +359,49 @@ func (q *Queries) RevokeUserRole(ctx context.Context, arg RevokeUserRoleParams) 
 	return err
 }
 
+const searchUsers = `-- name: SearchUsers :many
+SELECT id, email, password_hash, display_name, is_active, disabled_at, last_login_at, created_at, updated_at FROM users
+WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR display_name ILIKE '%' || $1 || '%')
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type SearchUsersParams struct {
+	Column1 interface{} `json:"column_1"`
+	Limit   int32       `json:"limit"`
+	Offset  int32       `json:"offset"`
+}
+
+func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]User, error) {
+	rows, err := q.db.Query(ctx, searchUsers, arg.Column1, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.PasswordHash,
+			&i.DisplayName,
+			&i.IsActive,
+			&i.DisabledAt,
+			&i.LastLoginAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setUserActive = `-- name: SetUserActive :one
 UPDATE users
 SET is_active = $2,
@@ -348,6 +418,49 @@ type SetUserActiveParams struct {
 
 func (q *Queries) SetUserActive(ctx context.Context, arg SetUserActiveParams) (User, error) {
 	row := q.db.QueryRow(ctx, setUserActive, arg.ID, arg.IsActive)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.DisplayName,
+		&i.IsActive,
+		&i.DisabledAt,
+		&i.LastLoginAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateUser = `-- name: UpdateUser :one
+UPDATE users
+SET email = $2,
+    password_hash = $3,
+    display_name = $4,
+    is_active = $5,
+    disabled_at = CASE WHEN $5 THEN NULL ELSE coalesce(disabled_at, now()) END,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, email, password_hash, display_name, is_active, disabled_at, last_login_at, created_at, updated_at
+`
+
+type UpdateUserParams struct {
+	ID           pgtype.UUID `json:"id"`
+	Email        string      `json:"email"`
+	PasswordHash pgtype.Text `json:"password_hash"`
+	DisplayName  string      `json:"display_name"`
+	IsActive     bool        `json:"is_active"`
+}
+
+func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUser,
+		arg.ID,
+		arg.Email,
+		arg.PasswordHash,
+		arg.DisplayName,
+		arg.IsActive,
+	)
 	var i User
 	err := row.Scan(
 		&i.ID,

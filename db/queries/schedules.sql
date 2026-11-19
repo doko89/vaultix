@@ -30,3 +30,17 @@ WHERE id = $1;
 
 -- name: DeleteSchedule :exec
 DELETE FROM schedules WHERE id = $1;
+
+-- name: UpdateSchedule :one
+UPDATE schedules
+SET schedule_type = $2, cron_expression = $3, interval_minutes = $4,
+    timezone = $5, next_run_at = $6, is_paused = $7, concurrency_limit = $8,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ListDueSchedulesBefore :many
+SELECT * FROM schedules
+WHERE NOT is_paused AND next_run_at IS NOT NULL AND next_run_at <= $1
+ORDER BY next_run_at ASC
+LIMIT $2;
