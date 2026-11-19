@@ -23,15 +23,173 @@ TECH_SPEC section 7 when you need migrations or codegen.
 
 ```bash
 make compose-up                    # postgres:5432, minio S3:9000 + console:9001, manager:8080
-make migrate-up                    # goose up on db/migrations (DATABASE_URL overridable)
-go run ./cmd/manager serve         # control plane (serve lands with backend team)
-go run ./cmd/agent run             # per-VM executor (enroll/run land with backend team)
+make migrate-up                    # goose-compatible up on db/migrations (DATABASE_URL overridable)
+go run ./cmd/manager serve         # control plane (auto-applies migrations on boot)
+go run ./cmd/agent run             # per-VM executor (enroll first, see E2E bootstrap)
 make web-dev                       # Vite dev server, proxies /api to the manager
 ```
 
-Defaults are dev-only (see `deploy/docker-compose.yml` header for the prod
-hardening checklist). Stop with `make compose-down` (volumes survive;
-`docker compose -f deploy/docker-compose.yml down -v` wipes them).
+The manager container also auto-migrates on boot, so `make migrate-up` is
+only needed for host-side runs. Stop with `make compose-down` (volumes
+survive; `docker compose -f deploy/docker-compose.yml --profile dev down -v`
+wipes them).
+
+If `make compose-up` fails pulling MinIO images, your registry is hitting
+the outage noted in `deploy/docker-compose.yml` (observed 2026-11-19) — use
+the hermetic E2E stack instead: `make e2e-up` (manager :8081, S3Mock :9090,
+postgres :5433, isolated under project `vaultix-e2e`).
+
+## Local endpoints and credentials — LOCAL DEV ONLY
+
+> **WARNING: every credential below is a published dev default. It is safe
+> only on your own machine behind `localhost`. NEVER reuse these values —
+> especially `VAULTIX_CRYPTO_KEY` — in staging, production, or any shared
+> environment. See the prod-hardening checklist at the top of
+> `deploy/docker-compose.yml` before exposing anything.**
+
+| Service              | Dev endpoint              | E2E endpoint (`make e2e-up`) |
+| -------------------- | ------------------------- | ---------------------------- |
+| Manager API + web UI | http://localhost:8080     | http://localhost:8081        |
+| Manager health       | http://localhost:8080/healthz | http://localhost:8081/healthz |
+| S3 API               | http://localhost:9000 (MinIO) | http://localhost:9090 (S3Mock, no console) |
+| S3 console           | http://localhost:9001 (MinIO) | — (use `aws --endpoint-url http://localhost:9090 s3 ls`) |
+| Postgres             | localhost:5432            | localhost:5433               |
+
+| Credential                    | Value                              | Env override            |
+| ----------------------------- | ---------------------------------- | ----------------------- |
+| Postgres user / password / db | `vaultix` / `vaultix-dev-only` / `vaultix` | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` |
+| S3 access / secret key        | `vaultix` / `vaultix-dev-only-change-me` | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
+| S3 bucket                     | `vaultix-backups`                  | `S3_BUCKET`             |
+| Manager crypto key (32 chars) | `dev-only-vaultix-crypto-key-0000` | `VAULTIX_CRYPTO_KEY`    |
+
+## E2E bootstrap
+
+End-to-end path: stack → migrate → seed admin → enroll agent → first backup
+→ restore. Needs `curl` and `jq`. Point `MGR` at your stack (dev `:8080`,
+e2e `:8081`):
+
+```bash
+MGR=http://localhost:8080   # http://localhost:8081 after `make e2e-up`
+```
+
+**1. Boot the stack.**
+
+```bash
+make e2e-up                      # hermetic: postgres + s3mock + bucket + manager
+# or: make compose-up            # dev: postgres + minio + bucket + manager
+curl -s $MGR/healthz             # {"status":"ok",...} once the manager is up
+```
+
+**2. Migrate.** The container already ran `migrate up` on boot; re-run
+explicitly any time with:
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile dev exec manager /usr/local/bin/manager migrate up
+# e2e project variant: add `-p vaultix-e2e` and swap `--profile dev` for `--profile e2e`
+# (full binary path: `exec` bypasses the image ENTRYPOINT)
+```
+
+(`manager migrate` also has `down` and `status`; host-side runs use
+`VAULTIX_DATABASE_URL=... go run ./cmd/manager migrate up`.)
+
+**3. Seed the admin user.**
+
+> **PENDING — lands in the parallel jobproto track.** The interface below is
+> the specified contract (`manager seed-admin` reads `VAULTIX_ADMIN_USER` /
+> `VAULTIX_ADMIN_PASSWORD`); until that command exists this step fails and
+> the session-gated API steps (4, 6, 7) are blocked. Agent enrollment (5)
+> still works: token issuance is intentionally public in local stacks.
+
+```bash
+VAULTIX_ADMIN_USER=admin VAULTIX_ADMIN_PASSWORD='change-me-strong' make seed-admin
+# e2e project variant:
+docker compose -f deploy/docker-compose.yml -p vaultix-e2e --profile e2e exec \
+  -e VAULTIX_ADMIN_USER=admin -e VAULTIX_ADMIN_PASSWORD='change-me-strong' \
+  manager /usr/local/bin/manager seed-admin
+```
+
+**4. Log in (session for the gated APIs).** `/api/policies`, `/api/jobs`,
+`/api/restore`, and friends require the `vaultix_session` cookie; the login
+below captures it from the `Set-Cookie` header (the cookie is `Secure`, so
+plain-HTTP clients must send it back as an explicit header). Mutating calls
+also need `-H 'X-Requested-With: XMLHttpRequest'` (CSRF rule).
+
+```bash
+curl -s -D /tmp/vaultix-headers.txt -o /dev/null -X POST $MGR/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"identifier":"admin","password":"change-me-strong"}'
+S=$(grep -i '^set-cookie: vaultix_session=' /tmp/vaultix-headers.txt | sed 's/.*vaultix_session=\([^;]*\).*/\1/')
+AUTH="Cookie: vaultix_session=$S"
+curl -s $MGR/api/auth/me -H "$AUTH"   # your user + roles
+```
+
+**5. Enroll an agent.** Issue a token, redeem it for agent credentials,
+persist them with the agent CLI, then run the daemon:
+
+```bash
+ENROLL=$(curl -s -X POST $MGR/api/agents/enroll-tokens | jq -r .token)
+JOIN=$(curl -s -X POST $MGR/api/agent/enroll -H 'Content-Type: application/json' \
+  -d "{\"token\":\"$ENROLL\",\"hostname\":\"e2e-vm\"}")
+AGENT_ID=$(echo "$JOIN" | jq -r .agent_id)
+AGENT_TOKEN=$(echo "$JOIN" | jq -r .token)
+export VAULTIX_AGENT_CONFIG=/tmp/vaultix-e2e-agent.yaml   # keeps e2e hermetic
+go run ./cmd/agent enroll --manager $MGR --token "$AGENT_TOKEN" --agent-id "$AGENT_ID"
+go run ./cmd/agent run        # heartbeat loop; Ctrl-C to stop
+```
+
+> **Known gap (agent track, verified live 2026-11-19):** token issuance,
+> redeem, and `agent enroll` all work, but `agent run` heartbeats 404: the
+> agent client posts to `/api/v1/agents/heartbeat`
+> (`internal/agent/client.go`) while the manager serves the agent protocol
+> at `/api/agent/*`. Job pickup/report is blocked on the same mismatch, so
+> live backup execution waits for the agent track to align the paths; the
+> manager-side policy → schedule → job flow in step 6 works up to pickup.
+
+**6. Run the first backup.** Create a policy (enabled by default), attach a
+schedule, trigger a manual run, then watch the job:
+
+```bash
+POLICY_ID=$(curl -s -X POST $MGR/api/policies -H "$AUTH" \
+  -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' \
+  -d "{\"name\":\"e2e-files\",\"agent_ids\":[\"$AGENT_ID\"],
+       \"retention\":{\"keep_last_n\":3,\"keep_days\":7,\"keep_minimum\":1},
+       \"targets\":[{\"type\":\"host_filesystem\",\"selector\":\"/var/log\"}]}" \
+  | jq -r .policy.id)
+SCHED_ID=$(curl -s -X POST $MGR/api/schedules -H "$AUTH" \
+  -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' \
+  -d "{\"policy_id\":\"$POLICY_ID\",\"kind\":\"daily\",\"time_of_day\":\"02:00\",\"timezone\":\"UTC\"}" \
+  | jq -r .id)
+curl -s -X POST $MGR/api/schedules/$SCHED_ID/run -H "$AUTH" \
+  -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' \
+  -d '{"agent_id":""}' | jq .            # 202 + jobs ("" fans out to all agents)
+curl -s "$MGR/api/jobs/" -H "$AUTH" | jq .   # job states incl. the new run
+```
+
+Once the agent protocol paths align (see step 5 note), the agent picks
+the job up on its next poll and reports back; poll `GET /api/jobs/{id}`
+until `state` is `succeeded`.
+
+**7. Restore from the snapshot.** Once a backup has produced a snapshot,
+find it, then walk the plan → confirm → execute flow (each step is
+explicit by design):
+
+```bash
+SNAP_ID=$(curl -s "$MGR/api/catalog?restorable_only=true" -H "$AUTH" | jq -r '.items[0].id')
+PLAN_ID=$(curl -s -X POST $MGR/api/restore/plan -H "$AUTH" \
+  -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' \
+  -d "{\"kind\":\"file\",\"snapshot_id\":\"$SNAP_ID\",\"requested_by\":\"admin\"}" \
+  | jq -r .id)
+CONFIRM_TOKEN=$(curl -s -X POST $MGR/api/restore/confirm -H "$AUTH" \
+  -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' \
+  -d "{\"plan_id\":\"$PLAN_ID\",\"actor\":\"admin\"}" \
+  | jq -r .token)
+curl -s -X POST $MGR/api/restore/execute -H "$AUTH" \
+  -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' \
+  -d "{\"token\":\"$CONFIRM_TOKEN\",\"actor\":\"admin\"}" | jq .
+```
+
+Tear down with `make e2e-down` (dev: `make compose-down`); append `-v` to
+the underlying `down` to wipe volumes. Follow logs with `make e2e-logs`.
 
 ## Build
 
@@ -42,30 +200,36 @@ go build -o bin/agent ./cmd/agent
 go vet ./...
 ```
 
-Release (manager embeds the web UI):
+Release (manager serves the web UI from `./web/dist`, so the UI must be
+built first — the release Dockerfile does both stages automatically):
 
 ```bash
-npm --prefix web run build
-go build -o bin/manager ./cmd/manager
+make release-build               # npm --prefix web run build + go build
+# docker image equivalent:
+docker build -f deploy/manager.Dockerfile -t vaultix-manager .
 ```
 
 ## Web dev
 
 ```bash
 cd web && npm install && npm run dev   # dev server
-npm --prefix web run build             # outputs web/dist/ (embedded by manager)
+npm --prefix web run build             # outputs web/dist/ (served by manager)
 ```
 
 ## Gates before submit
 
 ```bash
 make vet && make lint && go test ./...   # Go gates (TECH_SPEC section 6)
-npx --prefix web tsc -b && make web-build # web typecheck + build
+npm --prefix web run typecheck && make web-build # web typecheck + build
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same gates plus a non-blocking
-`sqlc diff` drift check when `sqlc` and a sqlc config are present.
+pinned-`sqlc` drift check (`generate` + `git diff` on `db/gen`) and
+`docker compose config` validation for the dev and e2e profiles.
 
 ## Status
 
-Skeleton only: no auth, job, or backup logic yet.
+Manager boots (API + scheduler + migrations) and agent enrollment works;
+agent heartbeats await the agent-track protocol-path fix noted above.
+E2E bootstrap is documented above. Web UI pages outside login are still
+placeholders; `manager seed-admin` lands with the jobproto track.

@@ -24,18 +24,18 @@ jobs:
       - name: golangci-lint
         if: hashFiles('.golangci.yml') != ''
         uses: golangci/golangci-lint-action@v8
-      - name: sqlc diff check (non-blocking)
-        # Fails the step (not the job) when generated code drifts from
-        # db/queries + sqlc config. Skips when sqlc is not installed or no
-        # sqlc config exists yet.
+      - name: sqlc drift check (non-blocking)
+        # Regenerates with the pinned toolchain and fails the step (not the
+        # job) when db/gen drifts from db/queries + sqlc config. Network
+        # hiccups downloading the pinned module also land here, never red.
         if: hashFiles('sqlc.yaml', 'sqlc.yml', 'sqlc.json', 'db/sqlc.yaml', 'db/sqlc.yml') != ''
         continue-on-error: true
         run: |
-          if ! command -v sqlc >/dev/null; then
-            echo "sqlc not installed; skipping diff check (see TECH_SPEC section 7 to install)"
-            exit 0
-          fi
-          sqlc diff
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.27.0 generate
+          git diff --exit-code -- db/gen || {
+            echo "::warning::db/gen drifted from db/queries — run 'make sqlc-generate' and commit the result"
+            exit 1
+          }
 
   web:
     name: Web (typecheck, build)
@@ -53,6 +53,21 @@ jobs:
       - name: npm ci
         run: npm ci
       - name: typecheck
-        run: npx tsc -b
+        run: npm run typecheck
       - name: build
         run: npm run build
+
+  compose:
+    name: Compose (dev+e2e config validation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No images are pulled: `config -q` only parses + interpolates.
+      # Each profile must validate alone (profile-scoped depends_on is a
+      # classic footgun) and combined.
+      - name: validate dev profile
+        run: docker compose -f deploy/docker-compose.yml --profile dev config -q
+      - name: validate e2e profile
+        run: docker compose -f deploy/docker-compose.yml --profile e2e config -q
+      - name: validate combined profiles
+        run: docker compose -f deploy/docker-compose.yml --profile dev --profile e2e config -q
