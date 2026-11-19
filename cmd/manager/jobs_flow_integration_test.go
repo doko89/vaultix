@@ -120,7 +120,11 @@ func TestIntegrationScheduleJobsAgentsFlow(t *testing.T) {
 	require.Equal(t, p.ID, queued[0].PolicyID)
 	require.Equal(t, v.Version, queued[0].PolicyVersion)
 	require.Equal(t, "filesystem", queued[0].Kind)
-	require.Equal(t, []string{"host_filesystem:/data", "docker_volume:vol1"}, queued[0].Targets)
+	require.Len(t, queued[0].Targets, 2)
+	require.Equal(t, "host_filesystem", queued[0].Targets[0].Type)
+	require.Equal(t, "/data", queued[0].Targets[0].Selector)
+	require.Equal(t, "docker_volume", queued[0].Targets[1].Type)
+	require.Equal(t, "vol1", queued[0].Targets[1].Selector)
 	require.Equal(t, string(domain.JobAssigned), queued[0].State)
 
 	// Progress report maps onto the outcome without transitioning.

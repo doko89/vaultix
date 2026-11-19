@@ -220,11 +220,16 @@ func isUUID(s string) bool {
 // ---- agents job queue ----
 
 // agentJobQueue adapts *job.Service (PollJobs/ReportResult) to the agents
-// track's JobQueue seam (Poll/Report).
+// track's JobQueue seam (Poll/CancelledIDs/Report/CompleteWithManifest).
+// backup drives manifest completion (see jobproto.go); keys mints TLS-only
+// data-key envelopes from the pinned policy version. Both may be nil in
+// partial wirings (completion/issuance then report explicit errors).
 type agentJobQueue struct {
 	jobs     *jobuc.Service
 	agents   domain.AgentRepository
 	policies domain.PolicyRepository
+	backup   *backupuc.Service
+	keys     *keyIssuer
 	log      *slog.Logger
 }
 
@@ -277,9 +282,15 @@ func (q *agentJobQueue) mapJob(ctx context.Context, j *domain.BackupJob) (agents
 			"job_id", j.ID, "policy_id", j.PolicyID, "version", j.PolicyVersion)
 		return agentshttp.QueuedJob{}, false, nil
 	}
-	targets := make([]string, 0, len(v.Targets))
+	targets := make([]agentshttp.JobTarget, 0, len(v.Targets))
 	for _, t := range v.Targets {
-		targets = append(targets, string(t.Type)+":"+t.Selector)
+		opts := t.Options
+		if opts == nil {
+			opts = map[string]string{}
+		}
+		targets = append(targets, agentshttp.JobTarget{
+			Type: string(t.Type), Selector: t.Selector, Options: opts,
+		})
 	}
 	return agentshttp.QueuedJob{
 		ID:            j.ID,
@@ -289,6 +300,7 @@ func (q *agentJobQueue) mapJob(ctx context.Context, j *domain.BackupJob) (agents
 		Targets:       targets,
 		State:         string(j.State),
 		Attempt:       j.Attempt,
+		Encryption:    q.jobEncryption(ctx, j.AgentID, v),
 	}, true, nil
 }
 

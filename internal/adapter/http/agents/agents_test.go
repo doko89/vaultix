@@ -234,12 +234,17 @@ func (f *fakeDiscovery) List(_ context.Context, agentID string, kind domain.Reso
 }
 
 type fakeJobs struct {
-	jobs      []QueuedJob
-	polled    []string
-	limits    []int
-	reports   []JobReport
-	pollErr   error
-	reportErr error
+	jobs        []QueuedJob
+	cancelled   []string
+	polled      []string
+	limits      []int
+	reports     []JobReport
+	completions []JobReport
+	outcome     *CompletionOutcome
+	pollErr     error
+	cancelErr   error
+	reportErr   error
+	completeErr error
 }
 
 func (f *fakeJobs) Poll(_ context.Context, agentID string, limit int) ([]QueuedJob, error) {
@@ -251,12 +256,30 @@ func (f *fakeJobs) Poll(_ context.Context, agentID string, limit int) ([]QueuedJ
 	return f.jobs, nil
 }
 
+func (f *fakeJobs) CancelledIDs(_ context.Context, _ string) ([]string, error) {
+	if f.cancelErr != nil {
+		return nil, f.cancelErr
+	}
+	return f.cancelled, nil
+}
+
 func (f *fakeJobs) Report(_ context.Context, agentID string, rep JobReport) error {
 	if f.reportErr != nil {
 		return f.reportErr
 	}
 	f.reports = append(f.reports, rep)
 	return nil
+}
+
+func (f *fakeJobs) CompleteWithManifest(_ context.Context, _ string, rep JobReport) (*CompletionOutcome, error) {
+	if f.completeErr != nil {
+		return nil, f.completeErr
+	}
+	f.completions = append(f.completions, rep)
+	if f.outcome != nil {
+		return f.outcome, nil
+	}
+	return &CompletionOutcome{Verified: true, SnapshotID: "snap-1"}, nil
 }
 
 func testRouter() (*stubRouter, *fakeAgents, *fakeDiscovery, *fakeJobs) {
@@ -320,6 +343,13 @@ func TestMountRegistersRoutes(t *testing.T) {
 		{"POST", "/api/agent/heartbeat", nil},
 		{"GET", "/api/agent/poll", nil},
 		{"POST", "/api/agent/report", nil},
+		{"POST", "/api/agent/jobs/:id/upload-grants", nil},
+		{"POST", "/api/agent/jobs/:id/multipart/init", nil},
+		{"POST", "/api/agent/jobs/:id/multipart/complete", nil},
+		{"POST", "/api/agent/jobs/:id/multipart/abort", nil},
+		{"POST", "/api/agent/restores/poll", nil},
+		{"POST", "/api/agent/restores/:id/download-grants", nil},
+		{"POST", "/api/agent/restores/:id/report", nil},
 	}
 	if len(r.routes) != len(want) {
 		t.Fatalf("want %d routes, got %d", len(want), len(r.routes))

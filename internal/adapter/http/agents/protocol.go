@@ -82,7 +82,10 @@ func (h *handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handlePoll returns dispatchable jobs for the authenticated agent.
+// handlePoll returns dispatchable jobs for the authenticated agent, plus the
+// IDs of jobs cancelled while assigned to it (the agent must stop in-flight
+// work for those immediately). Key issuance observes the transport: key_b64
+// envelopes are minted only over TLS.
 // GET /api/agent/poll?limit=
 func (h *handler) handlePoll(w http.ResponseWriter, r *http.Request) {
 	cred := credentialFrom(r.Context())
@@ -95,7 +98,15 @@ func (h *handler) handlePoll(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
-	jobs, err := h.jobs.Poll(r.Context(), cred.AgentID, limit)
+	ctx := ContextWithTransportSecure(r.Context(), transportSecure(r))
+	jobs, err := h.jobs.Poll(ctx, cred.AgentID, limit)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	// Cancellation delivery is load-bearing: a lookup failure fails the poll
+	// loudly rather than silently dropping stop signals.
+	cancelled, err := h.jobs.CancelledIDs(ctx, cred.AgentID)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -103,7 +114,10 @@ func (h *handler) handlePoll(w http.ResponseWriter, r *http.Request) {
 	if jobs == nil {
 		jobs = []QueuedJob{}
 	}
-	writeJSON(w, http.StatusOK, pollResponse{Jobs: jobs, ServerTime: h.now()})
+	if cancelled == nil {
+		cancelled = []string{}
+	}
+	writeJSON(w, http.StatusOK, pollResponse{Jobs: jobs, CancelledJobIDs: cancelled, ServerTime: h.now()})
 }
 
 // handleReport accepts a job report and/or a discovery snapshot.
@@ -136,10 +150,30 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		rep := JobReport{
 			JobID: req.Job.JobID, State: domain.JobState(req.Job.State),
 			Error: req.Job.Error, BytesRead: req.Job.BytesRead, BytesUploaded: req.Job.BytesUploaded,
+			Manifest: toJobManifest(req.Job.Manifest),
 		}
-		if err := h.jobs.Report(r.Context(), cred.AgentID, rep); err != nil {
-			h.writeError(w, r, err)
-			return
+		if rep.Manifest == nil {
+			// Legacy progress-only path (no manifest attached).
+			if err := h.jobs.Report(r.Context(), cred.AgentID, rep); err != nil {
+				h.writeError(w, r, err)
+				return
+			}
+		} else {
+			// Completion path: verify-then-complete; the job succeeds only
+			// when verified. A failed verification still answers 200 — the
+			// report was accepted — with verified:false and the actionable
+			// failure detail.
+			outcome, err := h.jobs.CompleteWithManifest(r.Context(), cred.AgentID, rep)
+			if err != nil {
+				h.writeError(w, r, err)
+				return
+			}
+			if outcome == nil {
+				outcome = &CompletionOutcome{}
+			}
+			resp.Verified = &outcome.Verified
+			resp.VerifyFailures = outcome.Failures
+			resp.SnapshotID = outcome.SnapshotID
 		}
 		resp.JobAccepted = true
 	}
@@ -163,4 +197,27 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		resp.ResourcesIngested = n
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// toJobManifest maps the wire manifest onto the queue seam. A nil DTO stays
+// nil, preserving the legacy progress-only path.
+func toJobManifest(dto *reportManifestDTO) *JobManifest {
+	if dto == nil {
+		return nil
+	}
+	m := &JobManifest{
+		BytesRead: dto.BytesRead, BytesCompressed: dto.BytesCompressed,
+		BytesUploaded: dto.BytesUploaded, Compression: dto.Compression,
+	}
+	if dto.Encryption != nil {
+		enabled := dto.Encryption.Enabled
+		m.Encrypted = &enabled
+		m.KeyRef = dto.Encryption.KeyRef
+	}
+	for _, o := range dto.Objects {
+		m.Objects = append(m.Objects, ManifestObject{
+			Key: o.Key, SizeBytes: o.SizeBytes, SHA256: o.SHA256,
+		})
+	}
+	return m
 }
