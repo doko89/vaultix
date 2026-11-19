@@ -25,7 +25,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	h.setSessionCookie(w, res.Token, res.Session.ExpiresAt)
+	h.setSessionCookie(w, r, res.Token, res.Session.ExpiresAt)
 	writeJSON(w, http.StatusOK, loginResponse{
 		User: toUserJSON(res.User), Roles: toRoleList(res.Roles), ExpiresAt: res.Session.ExpiresAt,
 	})
@@ -36,7 +36,7 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(h.cookie.Name); err == nil {
 		token = cookie.Value
 	}
-	h.clearSessionCookie(w)
+	h.clearSessionCookie(w, r)
 	var oidcURL string
 	if token != "" {
 		var err error
@@ -95,7 +95,7 @@ func (h *handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	h.setSessionCookie(w, res.Token, res.Session.ExpiresAt)
+	h.setSessionCookie(w, r, res.Token, res.Session.ExpiresAt)
 	http.Redirect(w, r, h.uiAfter, http.StatusFound)
 }
 
@@ -133,7 +133,7 @@ func (h *handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	h.clearSessionCookie(w) // sessions revoked; force re-login
+	h.clearSessionCookie(w, r) // sessions revoked; force re-login
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -547,19 +547,25 @@ func (h *handler) getLocalLogin(w http.ResponseWriter, r *http.Request) {
 
 // --- cookies ---
 
-func (h *handler) setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {
+func (h *handler) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
+	secure := h.cookie.secureFor(r)
 	http.SetCookie(w, &http.Cookie{
 		Name: h.cookie.Name, Value: token, Path: h.cookie.Path,
 		Domain: h.cookie.Domain, Expires: expires, HttpOnly: true,
-		Secure: h.cookie.Secure, SameSite: h.cookie.SameSite,
+		Secure: secure, SameSite: h.cookie.SameSite,
 	})
+	if h.log != nil {
+		// Mode + outcome only: the token must never reach the logs.
+		h.log.Debug("session cookie issued",
+			"mode", string(h.cookie.SecureMode), "secure", secure)
+	}
 }
 
-func (h *handler) clearSessionCookie(w http.ResponseWriter) {
+func (h *handler) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: h.cookie.Name, Value: "", Path: h.cookie.Path,
 		Domain: h.cookie.Domain, MaxAge: -1, HttpOnly: true,
-		Secure: h.cookie.Secure, SameSite: h.cookie.SameSite,
+		Secure: h.cookie.secureFor(r), SameSite: h.cookie.SameSite,
 	})
 }
 

@@ -26,9 +26,11 @@
 //     single instance or sticky callback routing until a shared store lands.
 //   - OIDC endpoints need Deps.OIDCRedirectURL (absolute callback URL
 //     registered at the IdP) and Deps.UIRedirectAfterLogin (default "/").
-//   - Cookies are HttpOnly + SameSite=Lax; set Cookie.Secure in production
-//     (TLS is mandatory per PRD §10.2) and add CSRF middleware at the
-//     platform layer for cookie-authenticated mutations.
+//   - Cookies are HttpOnly + SameSite=Lax; the Secure attribute follows
+//     Cookie.SecureMode (default auto: Secure iff the request arrived over
+//     a secure transport — direct TLS or a trusted proxy's https signal).
+//     Add CSRF middleware at the platform layer for cookie-authenticated
+//     mutations.
 //   - Client IP is taken from RemoteAddr; when running behind a trusted
 //     proxy, translate X-Forwarded-For in platform middleware instead.
 //   - API keys: pass the apikey use case as Deps.Keys (it satisfies
@@ -39,7 +41,10 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 
@@ -109,18 +114,78 @@ type Auditor interface {
 	RecordAuthEvent(ctx context.Context, e authsvc.AuditEvent) error
 }
 
+// SecureMode controls when the session cookie carries the Secure
+// attribute. Browsers never store a Secure cookie set over plain HTTP and
+// never send it back over HTTP, so a hardcoded Secure=true breaks every
+// plain-HTTP deployment (login succeeds, the next request is anonymous).
+type SecureMode string
+
+const (
+	// SecureAuto sets Secure iff the request arrived over a secure
+	// transport, as reported by CookieConfig.IsSecure (direct TLS or a
+	// trusted proxy's X-Forwarded-Proto:https signal — the same gate the
+	// agent track uses for key issuance). This is the default ("").
+	SecureAuto SecureMode = "auto"
+	// SecureOn always sets Secure. Use for strict production behind TLS.
+	SecureOn SecureMode = "on"
+	// SecureOff never sets Secure. Explicit local plain-HTTP development
+	// only — never in production.
+	SecureOff SecureMode = "off"
+)
+
+// ParseSecureMode parses a SecureMode value ("auto"|"on"|"off",
+// case-insensitive, "" means auto). Anything else is an error so a typo
+// fails fast at boot instead of silently picking a cookie policy.
+func ParseSecureMode(raw string) (SecureMode, error) {
+	switch m := SecureMode(strings.ToLower(strings.TrimSpace(raw))); m {
+	case "", SecureAuto:
+		return SecureAuto, nil
+	case SecureOn:
+		return SecureOn, nil
+	case SecureOff:
+		return SecureOff, nil
+	default:
+		return "", fmt.Errorf("invalid cookie secure mode %q: want auto|on|off", raw)
+	}
+}
+
 // CookieConfig tunes the session cookie.
 type CookieConfig struct {
 	// Name defaults to "vaultix_session".
 	Name string
-	// Secure must be true in production (TLS mandatory, PRD §10.2).
-	Secure bool
+	// SecureMode selects when the cookie carries the Secure attribute
+	// (default auto — follows the request's transport; see SecureMode).
+	SecureMode SecureMode
+	// IsSecure reports whether r arrived over a secure transport for
+	// SecureAuto. The platform wires the same probe the agent track uses
+	// (direct TLS, else trusted-proxy X-Forwarded-Proto:https). Nil
+	// means direct-TLS detection only (r.TLS != nil); untrusted or
+	// missing proxy signals then read insecure (fail closed).
+	IsSecure func(r *http.Request) bool
 	// SameSite defaults to http.SameSiteLaxMode.
 	SameSite http.SameSite
 	// Path defaults to "/".
 	Path string
 	// Domain is empty by default (host-only cookie).
 	Domain string
+}
+
+// secureFor resolves the Secure attribute for one request. Set and clear
+// paths both go through here so logout mirrors login: a clear-cookie with
+// a mismatched Secure flag would be ignored by the browser and the
+// session would linger.
+func (c CookieConfig) secureFor(r *http.Request) bool {
+	switch c.SecureMode {
+	case SecureOn:
+		return true
+	case SecureOff:
+		return false
+	default: // "" and SecureAuto (and any unknown value): follow transport.
+		if c.IsSecure != nil {
+			return c.IsSecure(r)
+		}
+		return r != nil && r.TLS != nil
+	}
 }
 
 // Deps wires Mount. Auth, Users, and Validate are required; Audit may be
@@ -134,6 +199,10 @@ type Deps struct {
 	Keys   KeyVerifier
 	Cookie CookieConfig
 	Clock  domain.Clock
+	// Logger receives the per-login Secure decision at debug level
+	// (mode + outcome only — token material is never logged). Nil
+	// disables cookie logging.
+	Logger *slog.Logger
 	// OIDCRedirectURL is the absolute callback URL registered at the IdP.
 	OIDCRedirectURL string
 	// UIRedirectAfterLogin is the post-callback landing page (default "/").
@@ -149,6 +218,7 @@ type handler struct {
 	audit    Auditor
 	cookie   CookieConfig
 	clock    domain.Clock
+	log      *slog.Logger
 	validate *validator.Validate
 	oidcCB   string
 	uiAfter  string
@@ -173,6 +243,9 @@ func Mount(r Router, deps Deps) *Gate {
 	if cookie.SameSite == 0 {
 		cookie.SameSite = http.SameSiteLaxMode
 	}
+	if cookie.SecureMode == "" {
+		cookie.SecureMode = SecureAuto
+	}
 	clock := deps.Clock
 	if clock == nil {
 		clock = domain.SystemClock{}
@@ -184,7 +257,7 @@ func Mount(r Router, deps Deps) *Gate {
 	h := &handler{
 		gate: &Gate{auth: deps.Auth, cookieName: cookie.Name, clear: clearCookie(cookie), keys: deps.Keys},
 		auth: deps.Auth, users: deps.Users, audit: deps.Audit,
-		cookie: cookie, clock: clock,
+		cookie: cookie, clock: clock, log: deps.Logger,
 		validate: validator.New(validator.WithRequiredStructEnabled()),
 		oidcCB:   deps.OIDCRedirectURL, uiAfter: uiAfter,
 		postOut: deps.PostLogoutRedirect,

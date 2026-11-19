@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/vaultix/vaultix/internal/adapter/crypto"
 	adapterhttp "github.com/vaultix/vaultix/internal/adapter/http"
@@ -56,10 +57,17 @@ TLS: pass --tls-cert and --tls-key (or VAULTIX_TLS_CERT / VAULTIX_TLS_KEY)
 to serve HTTPS (TLS 1.2+); with neither set the manager serves plain HTTP
 with a loud warning. Encrypted-backup data keys are issued only over a
 secure transport: direct TLS, or X-Forwarded-Proto: https from a proxy
-listed in VAULTIX_TRUSTED_PROXIES (comma-separated CIDRs, empty = none).`,
+listed in VAULTIX_TRUSTED_PROXIES (comma-separated CIDRs, empty = none).
+
+Session cookies follow the same transport gate by default: --cookie-secure
+(or VAULTIX_COOKIE_SECURE, or cookie_secure in the config file) takes
+auto|on|off (default auto). auto sets the Secure attribute only when the
+request arrived over a secure transport; on always sets it (strict TLS
+production); off never sets it (explicit local plain-HTTP development).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			bindRunFlags(cmd)
 			bindTLSFlags(cmd)
+			bindCookieSecureFlag(cmd)
 			return runServe(cmd.Context(), *configPath, skipMigrations)
 		},
 	}
@@ -67,7 +75,28 @@ listed in VAULTIX_TRUSTED_PROXIES (comma-separated CIDRs, empty = none).`,
 	cmd.Flags().BoolVar(&skipMigrations, "skip-migrations", false, "skip automatic `migrate up` on boot")
 	cmd.Flags().String("tls-cert", "", "TLS certificate PEM file for HTTPS (env VAULTIX_TLS_CERT); requires --tls-key")
 	cmd.Flags().String("tls-key", "", "TLS private key PEM file for HTTPS (env VAULTIX_TLS_KEY); requires --tls-cert")
+	cmd.Flags().String("cookie-secure", "auto", "session cookie Secure attribute: auto|on|off (env VAULTIX_COOKIE_SECURE)")
 	return cmd
+}
+
+// cookieSecureKey is the viper key for the session-cookie Secure mode.
+// Precedence: flag > env (VAULTIX_COOKIE_SECURE) > config file > default.
+const cookieSecureKey = "cookie_secure"
+
+// bindCookieSecureFlag binds the serve-local --cookie-secure flag to viper.
+// It runs inside RunE next to bindRunFlags/bindTLSFlags so the EXECUTING
+// command's parsed FlagSet wins; un-changed flags defer to env/config.
+func bindCookieSecureFlag(cmd *cobra.Command) {
+	if f := cmd.Flags().Lookup("cookie-secure"); f != nil {
+		_ = viper.BindPFlag(cookieSecureKey, f)
+	}
+	_ = viper.BindEnv(cookieSecureKey)
+}
+
+// resolveCookieSecure returns the configured session-cookie Secure mode,
+// failing fast on anything but auto|on|off.
+func resolveCookieSecure() (authhttp.SecureMode, error) {
+	return authhttp.ParseSecureMode(viper.GetString(cookieSecureKey))
 }
 
 func runServe(ctx context.Context, configPath string, skipMigrations bool) error {
@@ -86,7 +115,12 @@ func runServe(ctx context.Context, configPath string, skipMigrations bool) error
 	if err := agentshttp.SetTrustedProxies(resolveTrustedProxies()); err != nil {
 		return fmt.Errorf("trusted proxies: %w", err)
 	}
+	cookieMode, err := resolveCookieSecure()
+	if err != nil {
+		return err
+	}
 	logTransportMode(log, certFile)
+	log.Debug("session cookie Secure mode", "mode", string(cookieMode))
 	log.Info("manager starting", "version", version, "config", cfg.Redacted())
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -109,7 +143,7 @@ func runServe(ctx context.Context, configPath string, skipMigrations bool) error
 		log.Info("boot migrations complete", "applied", len(applied))
 	}
 
-	w, err := wire(ctx, pool, cfg, log)
+	w, err := wire(ctx, pool, cfg, log, cookieMode)
 	if err != nil {
 		return err
 	}
@@ -161,7 +195,7 @@ type wired struct {
 
 // wire builds every repository, usecase, and adapter, starts the
 // scheduler and the background tickers, and returns the router deps.
-func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger) (*wired, error) {
+func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger, cookieMode authhttp.SecureMode) (*wired, error) {
 	// Crypto box backs storage SecretBox AND auth provider secrets.
 	box, err := crypto.NewBoxFromEnv("")
 	if err != nil {
@@ -314,9 +348,14 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger)
 				Users: userSvc,
 				Audit: sink,
 				Keys:  apikeySvc,
-				// Secure per PRD §10.2 (TLS mandatory); name/path/
-				// SameSite take the slice defaults.
-				Cookie:               authhttp.CookieConfig{Secure: true},
+				// Secure follows the cookie_secure mode (default auto:
+				// per-request transport via the agent-track probe);
+				// name/path/SameSite take the slice defaults.
+				Cookie: authhttp.CookieConfig{
+					SecureMode: cookieMode,
+					IsSecure:   agentshttp.IsSecure,
+				},
+				Logger:               log,
 				OIDCRedirectURL:      cfg.OIDCRedirectURL,
 				UIRedirectAfterLogin: "/",
 			},
