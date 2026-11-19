@@ -2,37 +2,25 @@ package repo
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"sync"
-	"time"
 
+	"github.com/vaultix/vaultix/db/gen"
 	"github.com/vaultix/vaultix/internal/domain"
 )
 
-// StackRepo implements domain.StackRepository as a thread-safe in-memory
-// store. The schema in scope has no application_stacks tables and
-// migrations are frozen, so this interim implementation keeps stacks
-// working per-process until a stacks migration lands — at which point it
-// should be replaced by a pgx+sqlc implementation behind the same port
-// without touching callers.
+// StackRepo implements domain.StackRepository on
+// application_stacks/application_stack_resources.
 //
-// IDs passed empty are generated (16 random bytes, hex); timestamps behave
-// like database defaults (CreatedAt set once, UpdatedAt on every write).
+// Mapping notes: stack IDs are always database-generated UUIDs.
+// ResourceID/Selector are opaque TEXT with no FK to discovered_resources:
+// the selector pins the exact backup target when the discovered resource
+// no longer exists. Type round-trips as TEXT against the resource_type
+// check values (the eight domain target types plus "" for unset).
 type StackRepo struct {
-	mu        sync.RWMutex
-	stacks    map[string]*domain.ApplicationStack
-	resources map[string][]domain.ApplicationStackResource
+	baseRepo
 }
 
-func newStackRepo() *StackRepo {
-	return &StackRepo{
-		stacks:    map[string]*domain.ApplicationStack{},
-		resources: map[string][]domain.ApplicationStackResource{},
-	}
-}
-
-// CreateStack inserts a stack.
+// CreateStack inserts a stack. The ID is always database-generated;
+// s.ID/CreatedAt/UpdatedAt are populated from the row.
 func (r *StackRepo) CreateStack(ctx context.Context, s *domain.ApplicationStack) error {
 	if s == nil {
 		return validationError("stack is required")
@@ -40,19 +28,25 @@ func (r *StackRepo) CreateStack(ctx context.Context, s *domain.ApplicationStack)
 	if err := s.Validate(); err != nil {
 		return err
 	}
+	aid, err := mustParseUUID(s.AgentID, "agent id")
+	if err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if s.ID == "" {
-		s.ID = newStackID()
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	row, err := r.q.CreateStack(ctx, gen.CreateStackParams{
+		AgentID:     aid,
+		Name:        s.Name,
+		Description: s.Description,
+		ComposePath: s.ComposePath,
+	})
+	if err != nil {
+		return mapErr(err)
 	}
-	now := time.Now()
-	s.CreatedAt = now
-	s.UpdatedAt = now
-	stored := *s
-	r.stacks[s.ID] = &stored
+	*s = mapStack(row)
 	return nil
 }
 
@@ -61,16 +55,20 @@ func (r *StackRepo) GetStack(ctx context.Context, id string) (*domain.Applicatio
 	if id == "" {
 		return nil, notFound("stack")
 	}
+	sid, err := mustParseUUID(id, "stack id")
+	if err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	stored, ok := r.stacks[id]
-	if !ok {
-		return nil, notFound("stack")
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	row, err := r.q.GetStackByID(ctx, gen.GetStackByIDParams{ID: sid})
+	if err != nil {
+		return nil, mapErr(err)
 	}
-	out := *stored
+	out := mapStack(row)
 	return &out, nil
 }
 
@@ -82,34 +80,51 @@ func (r *StackRepo) UpdateStack(ctx context.Context, s *domain.ApplicationStack)
 	if err := s.Validate(); err != nil {
 		return err
 	}
+	sid, err := mustParseUUID(s.ID, "stack id")
+	if err != nil {
+		return err
+	}
+	aid, err := mustParseUUID(s.AgentID, "agent id")
+	if err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	stored, ok := r.stacks[s.ID]
-	if !ok {
-		return notFound("stack")
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	row, err := r.q.UpdateStack(ctx, gen.UpdateStackParams{
+		ID:          sid,
+		AgentID:     aid,
+		Name:        s.Name,
+		Description: s.Description,
+		ComposePath: s.ComposePath,
+	})
+	if err != nil {
+		return mapErr(err)
 	}
-	s.CreatedAt = stored.CreatedAt
-	s.UpdatedAt = time.Now()
-	updated := *s
-	r.stacks[s.ID] = &updated
+	*s = mapStack(row)
 	return nil
 }
 
-// DeleteStack removes a stack and its resource membership.
+// DeleteStack removes a stack; members cascade via the stack_id FK.
 func (r *StackRepo) DeleteStack(ctx context.Context, id string) error {
+	sid, err := mustParseUUID(id, "stack id")
+	if err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.stacks[id]; !ok {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	n, err := r.q.DeleteStack(ctx, gen.DeleteStackParams{ID: sid})
+	if err != nil {
+		return mapErr(err)
+	}
+	if n == 0 {
 		return notFound("stack")
 	}
-	delete(r.stacks, id)
-	delete(r.resources, id)
 	return nil
 }
 
@@ -118,56 +133,117 @@ func (r *StackRepo) ListStacks(ctx context.Context, agentID string) ([]domain.Ap
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := []domain.ApplicationStack{}
-	for _, stored := range r.stacks {
-		if agentID != "" && stored.AgentID != agentID {
-			continue
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	if agentID == "" {
+		rows, err := r.q.ListStacks(ctx)
+		if err != nil {
+			return nil, mapErr(err)
 		}
-		out = append(out, *stored)
+		return mapStacks(rows), nil
 	}
-	return out, nil
+	aid, err := mustParseUUID(agentID, "agent id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.ListStacksByAgent(ctx, gen.ListStacksByAgentParams{AgentID: aid})
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return mapStacks(rows), nil
 }
 
 // SetStackResources replaces a stack's resource membership.
 func (r *StackRepo) SetStackResources(ctx context.Context, stackID string, resources []domain.ApplicationStackResource) error {
+	sid, err := mustParseUUID(stackID, "stack id")
+	if err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.stacks[stackID]; !ok {
-		return notFound("stack")
-	}
-	stored := make([]domain.ApplicationStackResource, 0, len(resources))
-	for _, res := range resources {
-		res.StackID = stackID
-		stored = append(stored, res)
-	}
-	r.resources[stackID] = stored
-	return nil
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	return mapErr(r.inTx(ctx, func(q *gen.Queries) error {
+		if _, err := q.GetStackByID(ctx, gen.GetStackByIDParams{ID: sid}); err != nil {
+			return err
+		}
+		if err := q.DeleteStackResourcesByStack(ctx, gen.DeleteStackResourcesByStackParams{StackID: sid}); err != nil {
+			return err
+		}
+		for _, res := range resources {
+			_, err := q.AddStackResource(ctx, gen.AddStackResourceParams{
+				StackID:      sid,
+				ResourceID:   res.ResourceID,
+				Selector:     res.Selector,
+				ResourceType: string(res.Type),
+				RestoreOrder: saturatingInt32(res.RestoreOrder),
+				Required:     res.Required,
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
 }
 
-// ListStackResources returns a stack's resource membership.
+// ListStackResources returns a stack's resource membership ordered by
+// restore order.
 func (r *StackRepo) ListStackResources(ctx context.Context, stackID string) ([]domain.ApplicationStackResource, error) {
+	sid, err := mustParseUUID(stackID, "stack id")
+	if err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if _, ok := r.stacks[stackID]; !ok {
-		return nil, notFound("stack")
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	if _, err := r.q.GetStackByID(ctx, gen.GetStackByIDParams{ID: sid}); err != nil {
+		return nil, mapErr(err)
 	}
-	out := make([]domain.ApplicationStackResource, 0, len(r.resources[stackID]))
-	out = append(out, r.resources[stackID]...)
-	return out, nil
+	rows, err := r.q.ListStackResources(ctx, gen.ListStackResourcesParams{StackID: sid})
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return mapStackResources(uuidString(sid), rows), nil
 }
 
-func newStackID() string {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return time.Now().UTC().Format("20060102150405.000000000")
+// mapStack converts a stack row to the domain type.
+func mapStack(row gen.ApplicationStack) domain.ApplicationStack {
+	return domain.ApplicationStack{
+		ID:          uuidString(row.ID),
+		AgentID:     uuidString(row.AgentID),
+		Name:        row.Name,
+		Description: row.Description,
+		ComposePath: row.ComposePath,
+		CreatedAt:   timeOrZero(row.CreatedAt),
+		UpdatedAt:   timeOrZero(row.UpdatedAt),
 	}
-	return hex.EncodeToString(raw[:])
+}
+
+// mapStacks converts stack rows to domain values (never nil).
+func mapStacks(rows []gen.ApplicationStack) []domain.ApplicationStack {
+	out := make([]domain.ApplicationStack, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapStack(row))
+	}
+	return out
+}
+
+// mapStackResources converts member rows to domain values (never nil).
+func mapStackResources(stackID string, rows []gen.ApplicationStackResource) []domain.ApplicationStackResource {
+	out := make([]domain.ApplicationStackResource, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ApplicationStackResource{
+			StackID:      stackID,
+			ResourceID:   row.ResourceID,
+			Selector:     row.Selector,
+			Type:         domain.TargetType(row.ResourceType),
+			RestoreOrder: int(row.RestoreOrder),
+			Required:     row.Required,
+		})
+	}
+	return out
 }

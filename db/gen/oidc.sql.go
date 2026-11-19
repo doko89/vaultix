@@ -237,6 +237,11 @@ type GetProviderByIDRow struct {
 // OIDC providers + external identities (PRD §7.1.1).
 // NOTE: never select client_secret_encrypted in read APIs; the
 // GetProviderSecret query exists only for the server-side token exchange.
+// Column ownership: client_secret_encrypted holds the auth track's Box
+// envelope, written only through auth.ProviderSecretStore. Provider
+// create/update statements must NEVER write it (the secret reference
+// lives in endpoints JSON); UpdateProvider excludes it so config edits
+// cannot clobber a stored secret.
 func (q *Queries) GetProviderByID(ctx context.Context, arg GetProviderByIDParams) (GetProviderByIDRow, error) {
 	row := q.db.QueryRow(ctx, getProviderByID, arg.ID)
 	var i GetProviderByIDRow
@@ -607,11 +612,6 @@ func (q *Queries) UpdateIdentityLogin(ctx context.Context, arg UpdateIdentityLog
 	return err
 }
 
-// INTEGRATOR HAND-EDIT (sqlc unavailable in this env): mirrors the
-// db/queries/oidc.sql UpdateProvider change exactly (client_secret_encrypted
-// excluded — the auth track's ProviderSecretStore owns that column).
-// Re-running `sqlc generate` (sqlc v1.27.0, see sqlc.yaml) must produce
-// this same shape.
 const updateProvider = `-- name: UpdateProvider :one
 UPDATE oidc_providers
 SET name = $2, issuer = $3, discovery_url = $4, endpoints = $5,

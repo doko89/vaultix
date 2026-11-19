@@ -312,15 +312,23 @@ func TestNewExposesEveryPort(t *testing.T) {
 }
 
 func TestStackRepoRoundTrip(t *testing.T) {
-	ctx := context.Background()
-	repos := New(nil)
-	s := &domain.ApplicationStack{AgentID: "agent-1", Name: "web", Description: "d", ComposePath: "/srv/docker-compose.yml"}
+	repos := openIntegrationRepos(t)
+	ctx, cancel := testCtx()
+	defer cancel()
+	suffix := uniqueSuffix(t)
+
+	a := &domain.Agent{Hostname: "stack-" + suffix}
+	require.NoError(t, repos.Agents.CreateAgent(ctx, a))
+
+	s := &domain.ApplicationStack{AgentID: a.ID, Name: "web-" + suffix, Description: "d", ComposePath: "/srv/docker-compose.yml"}
 	require.NoError(t, repos.Stacks.CreateStack(ctx, s))
 	require.NotEmpty(t, s.ID)
+	require.False(t, s.CreatedAt.IsZero())
 
 	got, err := repos.Stacks.GetStack(ctx, s.ID)
 	require.NoError(t, err)
-	require.Equal(t, "web", got.Name)
+	require.Equal(t, "web-"+suffix, got.Name)
+	require.Equal(t, a.ID, got.AgentID)
 
 	s.Description = "updated"
 	require.NoError(t, repos.Stacks.UpdateStack(ctx, s))
@@ -329,23 +337,61 @@ func TestStackRepoRoundTrip(t *testing.T) {
 	require.Equal(t, "updated", got.Description)
 
 	require.NoError(t, repos.Stacks.SetStackResources(ctx, s.ID, []domain.ApplicationStackResource{
+		{ResourceID: "res-2", Selector: "/logs", Type: domain.TargetHostFilesystem, RestoreOrder: 2},
 		{ResourceID: "res-1", Selector: "/data", Type: domain.TargetHostFilesystem, RestoreOrder: 1, Required: true},
 	}))
 	members, err := repos.Stacks.ListStackResources(ctx, s.ID)
 	require.NoError(t, err)
-	require.Len(t, members, 1)
+	require.Len(t, members, 2)
 	require.Equal(t, s.ID, members[0].StackID)
+	require.Equal(t, "res-1", members[0].ResourceID, "ordered by restore_order")
 	require.True(t, members[0].Required)
 
-	stacks, err := repos.Stacks.ListStacks(ctx, "agent-1")
+	// Replace clears removed members.
+	require.NoError(t, repos.Stacks.SetStackResources(ctx, s.ID, nil))
+	members, err = repos.Stacks.ListStackResources(ctx, s.ID)
+	require.NoError(t, err)
+	require.Empty(t, members)
+
+	stacks, err := repos.Stacks.ListStacks(ctx, a.ID)
 	require.NoError(t, err)
 	require.Len(t, stacks, 1)
+
+	all, err := repos.Stacks.ListStacks(ctx, "")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(all), 1)
 
 	require.NoError(t, repos.Stacks.DeleteStack(ctx, s.ID))
 	_, err = repos.Stacks.GetStack(ctx, s.ID)
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	_, err = repos.Stacks.ListStackResources(ctx, s.ID)
 	require.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestMapStackHelpers(t *testing.T) {
+	id, err := parseUUID("6e4a83b0-1e2d-4c3b-8a5f-9d0c1b2a3944")
+	require.NoError(t, err)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	s := mapStack(gen.ApplicationStack{
+		ID: id, AgentID: id, Name: "web", Description: "d",
+		ComposePath: "/c", CreatedAt: timestamptz(now), UpdatedAt: timestamptz(now),
+	})
+	require.Equal(t, "6e4a83b0-1e2d-4c3b-8a5f-9d0c1b2a3944", s.ID)
+	require.Equal(t, "6e4a83b0-1e2d-4c3b-8a5f-9d0c1b2a3944", s.AgentID)
+	require.Equal(t, "web", s.Name)
+	require.True(t, now.Equal(s.CreatedAt))
+	require.NotNil(t, mapStacks(nil))
+	require.Empty(t, mapStacks(nil))
+
+	members := mapStackResources(s.ID, []gen.ApplicationStackResource{
+		{ResourceID: "res-1", Selector: "/data", ResourceType: "host_filesystem", RestoreOrder: 3, Required: true},
+	})
+	require.Len(t, members, 1)
+	require.Equal(t, s.ID, members[0].StackID)
+	require.Equal(t, domain.TargetHostFilesystem, members[0].Type)
+	require.Equal(t, 3, members[0].RestoreOrder)
+	require.True(t, members[0].Required)
+	require.NotNil(t, mapStackResources(s.ID, nil))
 }
 
 func TestStackRepoValidation(t *testing.T) {
