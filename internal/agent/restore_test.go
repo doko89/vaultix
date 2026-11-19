@@ -165,6 +165,52 @@ func TestRestoreExecuteEndToEnd(t *testing.T) {
 	assert.Equal(t, "restored!", string(got))
 }
 
+func TestExtractDirModes(t *testing.T) {
+	orig := RestoreJob{Destination: RestoreDestination{Mode: "original", Path: "/srv/data"}}
+	assert.Equal(t, "/srv", extractDir(orig))
+	alt := RestoreJob{Destination: RestoreDestination{Mode: "alternate", Path: "/tmp/restore"}}
+	assert.Equal(t, "/tmp/restore", extractDir(alt))
+	legacy := RestoreJob{Destination: RestoreDestination{Mode: "path", Path: "/tmp/legacy"}}
+	assert.Equal(t, "/tmp/legacy", extractDir(legacy))
+}
+
+func TestDestDirAnchorsRelativeAtWorkDir(t *testing.T) {
+	r := &Restorer{WorkDir: "/tmp/wd"}
+	assert.Equal(t, "/tmp/wd/testapp_restored", r.destDir("testapp_restored"))
+	assert.Equal(t, "/abs/dir", r.destDir("/abs/dir"))
+	assert.Equal(t, filepath.Join(os.TempDir(), "db"), (&Restorer{}).destDir("db"))
+}
+
+func TestRestoreExecuteOriginalModeExtractsIntoParent(t *testing.T) {
+	// Archives store entries under the source base name; an in-place
+	// restore of /tmp/x/data must land back at /tmp/x/data, not nest.
+	root := t.TempDir()
+	payload := makeTarZst(t, map[string]string{"data/a.txt": "in-place!"})
+	sum := sha256.Sum256(payload)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	stub := &StubManagerClient{}
+	stub.OnDownloadGrants = func(rid string, keys []string) (DownloadGrantsResponse, error) {
+		return DownloadGrantsResponse{Grants: []DownloadGrant{{Key: keys[0], URL: srv.URL + "/o"}}}, nil
+	}
+	stub.OnReportRestore = func(rid string, req RestoreReportRequest) error { return nil }
+	r := &Restorer{Manager: stub, WorkDir: t.TempDir()}
+	state, err := r.Execute(context.Background(), RestoreJob{
+		ID: "r-1", SnapshotID: "s-1", Kind: "filesystem",
+		Destination:     RestoreDestination{Mode: "original", Path: filepath.Join(root, "data")},
+		OverwritePolicy: "allow",
+		Objects:         []RestoreObject{{Key: "p/snap/r-1/t0", SizeBytes: int64(len(payload)), SHA256: hex.EncodeToString(sum[:])}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", state)
+	got, err := os.ReadFile(filepath.Join(root, "data", "a.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "in-place!", string(got))
+}
+
 func TestRestoreExecuteEncrypted(t *testing.T) {
 	payload := makeTarZst(t, map[string]string{"f.txt": "plain"})
 	key := testKeyB64(t)

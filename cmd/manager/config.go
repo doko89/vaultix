@@ -187,7 +187,10 @@ func loadConfig(configPath string) (Config, error) {
 	viper.AutomaticEnv()
 	// Nested keys must be bound explicitly: Unmarshal only consults env
 	// for known keys, and nested structs have no flag bindings.
+	// oidc_redirect_url has no flag or default either, so it needs the
+	// same treatment or VAULTIX_OIDC_REDIRECT_URL is silently ignored.
 	for _, key := range []string{
+		"oidc_redirect_url",
 		"s3.endpoint", "s3.bucket", "s3.region", "s3.access_key", "s3.secret_key", "s3.use_ssl",
 		"smtp.host", "smtp.port", "smtp.from", "smtp.auth", "smtp.username",
 		"smtp.password", "smtp.tls", "smtp.dial_timeout_seconds", "smtp.io_timeout_seconds",

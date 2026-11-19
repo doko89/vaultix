@@ -220,5 +220,14 @@ func runDiscovery(ctx context.Context, cfg agent.Config, log *slog.Logger) error
 	}
 	log.Info("docker discovery complete",
 		"containers", len(report.Containers), "volumes", len(report.Volumes))
+	resources := report.Resources()
+	if len(resources) == 0 {
+		return nil
+	}
+	mgr := agent.NewHTTPManagerClient(cfg.ManagerURL, cfg.Token, cfg.RequestTimeout)
+	if err := mgr.ReportResources(dctx, resources); err != nil {
+		return err
+	}
+	log.Info("discovery snapshot reported", "resources", len(resources))
 	return nil
 }

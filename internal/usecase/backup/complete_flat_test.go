@@ -170,3 +170,43 @@ func TestCompletionErrorFormat(t *testing.T) {
 	err := &CompletionError{Code: "verification_failed", Message: "1 failure"}
 	require.Equal(t, "backup completion failed [verification_failed]: 1 failure", err.Error())
 }
+
+// dbAssignedSnapshots simulates the SQL store: CreateSnapshot ignores the
+// assembled ID and writes back a database-assigned one, like the
+// gen_random_uuid() column default.
+type dbAssignedSnapshots struct {
+	domain.SnapshotRepository
+	inner    *fakeSnapshots
+	assigned string
+}
+
+func (f *dbAssignedSnapshots) CreateSnapshot(ctx context.Context, s *domain.Snapshot) error {
+	s.ID = f.assigned
+	return f.inner.CreateSnapshot(ctx, s)
+}
+
+func TestCompleteJobFlat_StoredSnapshotIDPropagates(t *testing.T) {
+	d, pol, jobs, snaps, _, objs := testDeps()
+	d.Snapshots = &dbAssignedSnapshots{SnapshotRepository: snaps, inner: snaps, assigned: "db-snap-9"}
+	s := mustService(t, d)
+	seedVersion(t, pol)
+	seedJob(jobs, "job-1")
+	m := flatManifest()
+	storeFlat(objs, m)
+
+	res, err := s.CompleteJobFlat(context.Background(), "job-1", m)
+	require.NoError(t, err)
+	require.True(t, res.OK)
+
+	job, err := jobs.GetJob(context.Background(), "job-1")
+	require.NoError(t, err)
+	require.Equal(t, "db-snap-9", job.SnapshotID)
+
+	man, err := snaps.GetManifest(context.Background(), "db-snap-9")
+	require.NoError(t, err, "manifest must reference the stored snapshot ID")
+	require.Equal(t, "db-snap-9", man.SnapshotID)
+	for _, o := range snaps.objects[man.ID] {
+		require.Equal(t, "db-snap-9", o.SnapshotID)
+	}
+	require.NotEmpty(t, snaps.objects[man.ID])
+}

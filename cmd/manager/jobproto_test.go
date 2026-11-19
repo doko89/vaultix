@@ -764,7 +764,7 @@ func TestRestorePollGrantReportFlow(t *testing.T) {
 	require.Equal(t, "snap-1", asg.SnapshotID)
 	require.Equal(t, "file", asg.Kind)
 	require.Equal(t, "original", asg.Destination.Mode)
-	require.Equal(t, "warn", asg.OverwritePolicy)
+	require.Equal(t, "allow", asg.OverwritePolicy)
 	require.False(t, asg.Encryption.Enabled)
 	require.Empty(t, asg.Encryption.KeyB64)
 	require.Len(t, asg.Objects, 2, "manifest artifact + data object")

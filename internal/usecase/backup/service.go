@@ -116,6 +116,13 @@ func (s *Service) runCompletion(ctx context.Context, job *domain.BackupJob, comp
 	if err := s.snapshots.CreateSnapshot(ctx, snap); err != nil {
 		return nil, err
 	}
+	// CreateSnapshot writes back the stored ID (the SQL insert defaults it);
+	// the manifest and objects assembled above still carry the pre-insert
+	// ID, so propagate the stored one before persisting them.
+	manifest.SnapshotID = snap.ID
+	for i := range objects {
+		objects[i].SnapshotID = snap.ID
+	}
 	if err := s.snapshots.PutManifest(ctx, manifest); err != nil {
 		return nil, err
 	}
@@ -187,8 +194,14 @@ func (s *Service) failJobWithResult(ctx context.Context, job *domain.BackupJob, 
 // verificationSummary condenses gate failures for the job error detail.
 func verificationSummary(res *VerificationResult) string {
 	var b strings.Builder
+	verified := res.CheckedObjects - len(res.Failures)
+	if verified < 0 {
+		// Failures can outnumber checked data objects (the manifest
+		// artifact itself can fail); never report negative progress.
+		verified = 0
+	}
 	fmt.Fprintf(&b, "%d of %d objects verified, %d failure(s): ",
-		res.CheckedObjects-len(res.Failures), res.CheckedObjects, len(res.Failures))
+		verified, res.CheckedObjects, len(res.Failures))
 	for i, f := range res.Failures {
 		if i > 0 {
 			b.WriteString("; ")

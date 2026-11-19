@@ -120,7 +120,7 @@ func (u *Uploader) putObject(ctx context.Context, jobID string, a *Artifact, g U
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("agent: job %s: object %s: aborted: %w", jobID, a.Name, err)
 		}
-		lastErr = u.putOnce(ctx, a.Path, g)
+		lastErr = u.putOnce(ctx, a.Path, g, a.SHA256)
 		if lastErr == nil {
 			if u.OnProgress != nil {
 				u.OnProgress(a.SizeBytes)
@@ -138,7 +138,12 @@ func (u *Uploader) putObject(ctx context.Context, jobID string, a *Artifact, g U
 	return fmt.Errorf("agent: job %s: upload object %s: %v (after %d attempts)", jobID, a.Name, lastErr, uploadMaxRetries)
 }
 
-func (u *Uploader) putOnce(ctx context.Context, path string, g UploadGrant) error {
+// checksumMetaHeader carries the staged payload's checksum as S3 user
+// metadata so the manager's verification gate can compare it on HEAD
+// (plain ETags are MD5 and never match the sha256 manifest).
+const checksumMetaHeader = "x-amz-meta-checksum"
+
+func (u *Uploader) putOnce(ctx context.Context, path string, g UploadGrant, sha256Hex string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open staged file: %w", err)
@@ -155,6 +160,10 @@ func (u *Uploader) putOnce(ctx context.Context, path string, g UploadGrant) erro
 	req.ContentLength = fi.Size()
 	for k, v := range g.Headers {
 		req.Header.Set(k, v)
+	}
+	// Grant headers win when the manager pins the checksum itself.
+	if strings.TrimSpace(sha256Hex) != "" && req.Header.Get(checksumMetaHeader) == "" {
+		req.Header.Set(checksumMetaHeader, "sha256:"+strings.ToLower(strings.TrimSpace(sha256Hex)))
 	}
 	resp, err := u.httpClient().Do(req)
 	if err != nil {

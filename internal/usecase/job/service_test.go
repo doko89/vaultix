@@ -586,9 +586,9 @@ func TestCancelRules(t *testing.T) {
 	}{
 		{domain.JobQueued, true},
 		{domain.JobRunning, true},
-		{domain.JobAssigned, false},
-		{domain.JobUploading, false},
-		{domain.JobVerifying, false},
+		{domain.JobAssigned, true},
+		{domain.JobUploading, true},
+		{domain.JobVerifying, true},
 		{domain.JobSucceeded, false},
 		{domain.JobFailed, false},
 		{domain.JobCancelled, false},

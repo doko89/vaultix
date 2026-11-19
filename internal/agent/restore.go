@@ -122,6 +122,32 @@ func (r *Restorer) report(ctx context.Context, restoreID, state string, err erro
 	_ = r.Manager.ReportRestore(rctx, restoreID, req)
 }
 
+// extractDir resolves the tar extraction root. File/volume archives store
+// entries under the source's base name, so in-place ("original") restores
+// extract into the parent of the original path (the archived base lands
+// back in place); alternate restores extract into the alternate directory
+// itself.
+func extractDir(job RestoreJob) string {
+	if strings.EqualFold(strings.TrimSpace(job.Destination.Mode), "original") {
+		return filepath.Dir(job.Destination.Path)
+	}
+	return job.Destination.Path
+}
+
+// destDir anchors relative destinations (e.g. database names) at the agent
+// work dir so a restore never materializes relative to the process working
+// directory. Absolute destinations pass through unchanged.
+func (r *Restorer) destDir(dir string) string {
+	if filepath.IsAbs(dir) {
+		return dir
+	}
+	base := r.WorkDir
+	if base == "" {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, dir)
+}
+
 // restoreObject downloads one object, verifies sha256, decrypts, and either
 // extracts (tar payloads) or writes (db dumps) into the destination.
 func (r *Restorer) restoreObject(ctx context.Context, job RestoreJob, obj RestoreObject, g DownloadGrant) error {
@@ -156,12 +182,12 @@ func (r *Restorer) restoreObject(ctx context.Context, job RestoreJob, obj Restor
 	defer dec.Close()
 
 	if isTarPayload(job.Kind, obj.Key) {
-		if err := ExtractTar(dec, job.Destination.Path, job.OverwriteAllowed(), r.maxExtractBytes()); err != nil {
+		if err := ExtractTar(dec, r.destDir(extractDir(job)), job.OverwriteAllowed(), r.maxExtractBytes()); err != nil {
 			return fmt.Errorf("agent: restore %s: object %s: %w", job.ID, obj.Key, err)
 		}
 	} else {
 		name := restoreFileName(job.Kind, obj.Key)
-		if err := WriteRestoreFile(dec, job.Destination.Path, name, job.OverwriteAllowed(), r.maxExtractBytes()); err != nil {
+		if err := WriteRestoreFile(dec, r.destDir(job.Destination.Path), name, job.OverwriteAllowed(), r.maxExtractBytes()); err != nil {
 			return fmt.Errorf("agent: restore %s: object %s: %w", job.ID, obj.Key, err)
 		}
 	}

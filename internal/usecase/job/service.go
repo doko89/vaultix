@@ -437,17 +437,19 @@ func (s *Service) Retry(ctx context.Context, jobID, createdBy string) (*domain.B
 	return j, nil
 }
 
-// Cancel cancels a queued or running job. Any other state (including
-// already-terminal jobs) is rejected. The agent holding a running job is
-// notified best-effort through CancelNotifier; notification failure never
-// fails the cancellation.
+// Cancel cancels an active job (queued, assigned, running, uploading, or
+// verifying, per the domain transition table). Terminal jobs are rejected.
+// The agent holding the job is notified best-effort through CancelNotifier;
+// notification failure never fails the cancellation.
 func (s *Service) Cancel(ctx context.Context, jobID string) (*domain.BackupJob, error) {
 	j, err := s.jobs.GetJob(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	if j.State != domain.JobQueued && j.State != domain.JobRunning {
-		return nil, fmt.Errorf("job: cancel requires queued or running state, job %s is %s: %w", jobID, j.State, domain.ErrConflict)
+	switch j.State {
+	case domain.JobQueued, domain.JobAssigned, domain.JobRunning, domain.JobUploading, domain.JobVerifying:
+	default:
+		return nil, fmt.Errorf("job: cancel requires an active job, job %s is %s: %w", jobID, j.State, domain.ErrConflict)
 	}
 	if err := s.applyTransition(j, domain.JobCancelled); err != nil {
 		return nil, err

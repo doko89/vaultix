@@ -3,9 +3,17 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/client"
+)
+
+// Manager resource kinds for the discovery snapshot (must match the
+// manager's known kinds in internal/usecase/discovery).
+const (
+	resourceKindDockerContainer = "docker_container"
+	resourceKindDockerVolume    = "docker_volume"
 )
 
 // DockerLister is the narrow read-only slice of the Docker Engine client used
@@ -136,4 +144,43 @@ func (d *Discoverer) Discover(ctx context.Context) (DiscoveryReport, error) {
 		})
 	}
 	return report, nil
+}
+
+// Resources flattens the report into manager-bound inventory entries.
+// Container names prefer the first Engine name (leading "/" trimmed) and
+// fall back to the short container ID; volumes use the volume name.
+func (r DiscoveryReport) Resources() []ResourceReport {
+	if r.Disabled {
+		return nil
+	}
+	out := make([]ResourceReport, 0, len(r.Containers)+len(r.Volumes))
+	for _, c := range r.Containers {
+		name := c.ID
+		if len(name) > 12 {
+			name = name[:12]
+		}
+		if len(c.Names) > 0 && strings.TrimSpace(c.Names[0]) != "" {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+		out = append(out, ResourceReport{
+			Kind: resourceKindDockerContainer,
+			Name: name,
+			Detail: map[string]string{
+				"image":  c.Image,
+				"state":  c.State,
+				"status": c.Status,
+			},
+		})
+	}
+	for _, v := range r.Volumes {
+		out = append(out, ResourceReport{
+			Kind: resourceKindDockerVolume,
+			Name: v.Name,
+			Detail: map[string]string{
+				"driver":     v.Driver,
+				"mountpoint": v.Mountpoint,
+			},
+		})
+	}
+	return out
 }

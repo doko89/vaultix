@@ -45,6 +45,7 @@ func TestConfigEnv(t *testing.T) {
 	t.Setenv("VAULTIX_S3_BUCKET", "backups")
 	t.Setenv("VAULTIX_S3_SECRET_KEY", "shh")
 	t.Setenv("VAULTIX_SMTP_HOST", "mail.example")
+	t.Setenv("VAULTIX_OIDC_REDIRECT_URL", "https://vaultix.example/api/auth/oidc/callback")
 	cfg, err := loadConfig("")
 	require.NoError(t, err)
 	require.NoError(t, cfg.Validate())
@@ -52,6 +53,7 @@ func TestConfigEnv(t *testing.T) {
 	assert.Equal(t, "debug", cfg.LogLevel)
 	assert.True(t, cfg.S3.Configured())
 	assert.Equal(t, "mail.example", cfg.SMTP.Host)
+	assert.Equal(t, "https://vaultix.example/api/auth/oidc/callback", cfg.OIDCRedirectURL)
 }
 
 func TestConfigFile(t *testing.T) {

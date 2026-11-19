@@ -182,6 +182,15 @@ type JobReportPayload struct {
 	Manifest      *Manifest `json:"manifest,omitempty"`
 }
 
+// ResourceReport is one discovered-inventory entry for POST
+// /api/agent/report's resources section. Kind must be a manager-known
+// resource kind (e.g. "docker_container", "docker_volume").
+type ResourceReport struct {
+	Kind   string            `json:"kind"`
+	Name   string            `json:"name"`
+	Detail map[string]string `json:"detail,omitempty"`
+}
+
 // --- Upload grants ---
 
 // GrantObject is one object the agent proposes to upload. Key is the

@@ -443,9 +443,12 @@ func (p *agentDataPlane) AbortMultipartUpload(ctx context.Context, agentID, jobI
 
 // ---- restores ----
 
-// restoreOverwritePolicy is the MVP overwrite behavior (PRD §7.13: the
-// system must warn before overwriting existing data).
-const restoreOverwritePolicy = "warn"
+// restoreOverwritePolicy is the MVP overwrite behavior. PRD §7.13 requires a
+// warning before overwriting: the plan step carries that warning and the
+// job exists only after explicit confirm+execute, so the dispatched
+// assignment allows the confirmed overwrite ("warn" would make the agent
+// refuse every in-place restore over existing data).
+const restoreOverwritePolicy = "allow"
 
 // PollRestore returns the agent's oldest unfinished restore job (resuming an
 // in-flight one before starting a queued one), or (nil, nil) when none is

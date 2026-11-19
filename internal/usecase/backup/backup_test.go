@@ -554,3 +554,12 @@ func TestCompleteJob_WrongStateRefused(t *testing.T) {
 	_, err := s.CompleteJob(context.Background(), "job-1", fileReport())
 	require.Error(t, err)
 }
+
+func TestVerificationSummaryNeverNegative(t *testing.T) {
+	res := &VerificationResult{CheckedObjects: 1, Failures: []ObjectFailure{
+		{ObjectKey: "m", Reason: ReasonMissing},
+		{ObjectKey: "o", Reason: ReasonMissing},
+	}}
+	require.Equal(t, "0 of 1 objects verified, 2 failure(s): m: missing; o: missing",
+		verificationSummary(res))
+}

@@ -102,6 +102,31 @@ func TestUploadSinglePUT(t *testing.T) {
 	assert.Equal(t, int64(len("payload-zero")+len("payload-one")), progressTotal)
 }
 
+func TestUploadSinglePUTSendsChecksumMetadata(t *testing.T) {
+	f, srv := newFakeGrantServer(t, 0)
+	var gotMeta atomic.Value
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMeta.Store(r.Header.Get(checksumMetaHeader))
+		body, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		f.store[r.URL.Path] = body
+		w.WriteHeader(http.StatusOK)
+	})
+	stub := &StubManagerClient{}
+	stub.OnUploadGrants = func(_ string, _ UploadGrantsRequest) (UploadGrantsResponse, error) {
+		return UploadGrantsResponse{Grants: []UploadGrant{
+			{Key: "tenant/jobs/job-1/t0.tar.zst", URL: srv.URL + "/put/t0"},
+		}}, nil
+	}
+	up := &Uploader{Manager: stub, NewBackOff: fastBackoff}
+	a := stageFile(t, "t0.tar.zst", []byte("payload-zero"))
+	a.SHA256 = "ABCDEF0123456789"
+	_, err := up.UploadJob(context.Background(), "job-1", []*Artifact{a})
+	require.NoError(t, err)
+	assert.Equal(t, "sha256:abcdef0123456789", gotMeta.Load(),
+		"PUT must carry the payload checksum for the manager verify gate")
+}
+
 func TestUploadRetriesThenSucceeds(t *testing.T) {
 	f2, srv2 := newFakeGrantServer(t, 2) // first 2 PUTs fail
 	stub := &StubManagerClient{}

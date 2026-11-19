@@ -61,6 +61,7 @@ type ManagerClient interface {
 	Heartbeat(ctx context.Context, req HeartbeatRequest) (HeartbeatResponse, error)
 	PollJobs(ctx context.Context, limit int) (PollResponse, error)
 	ReportJob(ctx context.Context, rep JobReportPayload) error
+	ReportResources(ctx context.Context, resources []ResourceReport) error
 	UploadGrants(ctx context.Context, jobID string, req UploadGrantsRequest) (UploadGrantsResponse, error)
 	MultipartInit(ctx context.Context, jobID string, req MultipartInitRequest) (MultipartInitResponse, error)
 	MultipartComplete(ctx context.Context, jobID string, req MultipartCompleteRequest) error
@@ -115,6 +116,12 @@ func (c *HTTPManagerClient) PollJobs(ctx context.Context, limit int) (PollRespon
 
 func (c *HTTPManagerClient) ReportJob(ctx context.Context, rep JobReportPayload) error {
 	body := map[string]any{"job": rep}
+	return c.do(ctx, http.MethodPost, c.baseURL+pathReport, body, nil)
+}
+
+// ReportResources posts a discovery snapshot (resources-only report).
+func (c *HTTPManagerClient) ReportResources(ctx context.Context, resources []ResourceReport) error {
+	body := map[string]any{"resources": resources}
 	return c.do(ctx, http.MethodPost, c.baseURL+pathReport, body, nil)
 }
 
@@ -211,19 +218,21 @@ func (c *HTTPManagerClient) do(ctx context.Context, method, url string, in, out 
 
 // StubManagerClient is an in-memory ManagerClient for tests and offline runs.
 type StubManagerClient struct {
-	OnHeartbeat      func(req HeartbeatRequest) (HeartbeatResponse, error)
-	OnPollJobs       func(limit int) (PollResponse, error)
-	OnReportJob      func(rep JobReportPayload) error
-	OnUploadGrants   func(jobID string, req UploadGrantsRequest) (UploadGrantsResponse, error)
-	OnMultipartInit  func(jobID string, req MultipartInitRequest) (MultipartInitResponse, error)
-	OnMultipartDone  func(jobID string, req MultipartCompleteRequest) error
-	OnMultipartAbort func(jobID string, req MultipartAbortRequest) error
-	OnPollRestore    func(agentID string) (*RestoreJob, error)
-	OnDownloadGrants func(restoreID string, keys []string) (DownloadGrantsResponse, error)
-	OnReportRestore  func(restoreID string, req RestoreReportRequest) error
+	OnHeartbeat       func(req HeartbeatRequest) (HeartbeatResponse, error)
+	OnPollJobs        func(limit int) (PollResponse, error)
+	OnReportJob       func(rep JobReportPayload) error
+	OnReportResources func(resources []ResourceReport) error
+	OnUploadGrants    func(jobID string, req UploadGrantsRequest) (UploadGrantsResponse, error)
+	OnMultipartInit   func(jobID string, req MultipartInitRequest) (MultipartInitResponse, error)
+	OnMultipartDone   func(jobID string, req MultipartCompleteRequest) error
+	OnMultipartAbort  func(jobID string, req MultipartAbortRequest) error
+	OnPollRestore     func(agentID string) (*RestoreJob, error)
+	OnDownloadGrants  func(restoreID string, keys []string) (DownloadGrantsResponse, error)
+	OnReportRestore   func(restoreID string, req RestoreReportRequest) error
 
 	Heartbeats []HeartbeatRequest
 	Reports    []JobReportPayload
+	Resources  [][]ResourceReport
 	Restores   []RestoreReportRequest
 }
 
@@ -246,6 +255,14 @@ func (s *StubManagerClient) ReportJob(_ context.Context, rep JobReportPayload) e
 	s.Reports = append(s.Reports, rep)
 	if s.OnReportJob != nil {
 		return s.OnReportJob(rep)
+	}
+	return nil
+}
+
+func (s *StubManagerClient) ReportResources(_ context.Context, resources []ResourceReport) error {
+	s.Resources = append(s.Resources, resources)
+	if s.OnReportResources != nil {
+		return s.OnReportResources(resources)
 	}
 	return nil
 }
