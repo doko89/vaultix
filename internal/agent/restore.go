@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -62,17 +63,25 @@ func (r *Restorer) Execute(ctx context.Context, job RestoreJob) (string, error) 
 	}
 	if strings.TrimSpace(job.Destination.Path) == "" {
 		err := fmt.Errorf("agent: restore %s: missing destination path", job.ID)
-		r.report(ctx, job.ID, "failed", err)
+		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
 	if len(job.Objects) == 0 {
 		err := fmt.Errorf("agent: restore %s: snapshot has no objects", job.ID)
-		r.report(ctx, job.ID, "failed", err)
+		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
 	if job.Encryption.Enabled && strings.TrimSpace(job.Encryption.KeyB64) == "" {
 		err := fmt.Errorf("agent: restore %s: snapshot is encrypted but manager sent no key", job.ID)
-		r.report(ctx, job.ID, "failed", err)
+		r.report(ctx, job.ID, "failed", err, nil, nil)
+		return "failed", err
+	}
+	// Selective restore (PRD 7.13): a non-empty path list extracts only
+	// the listed files/dirs; empty restores the whole scope as before.
+	wants, err := normalizeRestorePaths(job.Paths)
+	if err != nil {
+		err = fmt.Errorf("agent: restore %s: %w", job.ID, err)
+		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
 	keys := make([]string, 0, len(job.Objects))
@@ -82,37 +91,49 @@ func (r *Restorer) Execute(ctx context.Context, job RestoreJob) (string, error) 
 	grants, err := r.Manager.DownloadGrants(ctx, job.ID, keys)
 	if err != nil {
 		err = fmt.Errorf("agent: restore %s: download grants: %w", job.ID, err)
-		r.report(ctx, job.ID, "failed", err)
+		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
 	if len(grants.Grants) != len(job.Objects) {
 		err = fmt.Errorf("agent: restore %s: download grants: want %d, got %d", job.ID, len(job.Objects), len(grants.Grants))
-		r.report(ctx, job.ID, "failed", err)
+		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
 	if err := os.MkdirAll(r.workDirFor(job.ID), 0o755); err != nil {
 		err = fmt.Errorf("agent: restore %s: create staging dir: %w", job.ID, err)
-		r.report(ctx, job.ID, "failed", err)
+		r.report(ctx, job.ID, "failed", err, nil, nil)
 		return "failed", err
 	}
 	defer r.Cleanup(job.ID)
+	matched := make(map[string]bool, len(wants))
 	for i, obj := range job.Objects {
 		if err := ctx.Err(); err != nil {
 			rerr := fmt.Errorf("agent: restore %s: aborted: %w", job.ID, err)
-			r.report(ctx, job.ID, "failed", rerr)
+			r.report(ctx, job.ID, "failed", rerr, orderedMatched(wants, matched), nil)
 			return "failed", rerr
 		}
-		if err := r.restoreObject(ctx, job, obj, grants.Grants[i]); err != nil {
-			r.report(ctx, job.ID, "failed", err)
+		got, err := r.restoreObject(ctx, job, obj, grants.Grants[i], wants)
+		if err != nil {
+			r.report(ctx, job.ID, "failed", err, orderedMatched(wants, matched), nil)
 			return "failed", err
 		}
+		for _, w := range got {
+			matched[w] = true
+		}
 	}
-	r.report(ctx, job.ID, "succeeded", nil)
+	restored := orderedMatched(wants, matched)
+	if missing := orderedMissing(wants, matched); len(missing) > 0 {
+		err := fmt.Errorf("agent: restore %s: %d requested path(s) not found in snapshot: %s",
+			job.ID, len(missing), quoteEach(missing))
+		r.report(ctx, job.ID, "failed", err, restored, missing)
+		return "failed", err
+	}
+	r.report(ctx, job.ID, "succeeded", nil, restored, nil)
 	return "succeeded", nil
 }
 
-func (r *Restorer) report(ctx context.Context, restoreID, state string, err error) {
-	req := RestoreReportRequest{State: state}
+func (r *Restorer) report(ctx context.Context, restoreID, state string, err error, restored, missing []string) {
+	req := RestoreReportRequest{State: state, RestoredPaths: restored, MissingPaths: missing}
 	if err != nil {
 		req.Error = err.Error()
 	}
@@ -149,15 +170,16 @@ func (r *Restorer) destDir(dir string) string {
 }
 
 // restoreObject downloads one object, verifies sha256, decrypts, and either
-// extracts (tar payloads) or writes (db dumps) into the destination.
-func (r *Restorer) restoreObject(ctx context.Context, job RestoreJob, obj RestoreObject, g DownloadGrant) error {
+// extracts (tar payloads) or writes (db dumps) into the destination. It
+// returns the normalized requested paths this object satisfied.
+func (r *Restorer) restoreObject(ctx context.Context, job RestoreJob, obj RestoreObject, g DownloadGrant, wants []string) ([]string, error) {
 	staged := filepath.Join(r.workDirFor(job.ID), fmt.Sprintf("obj-%x.bin", sha256.Sum256([]byte(obj.Key))))
 	if err := r.download(ctx, job.ID, obj, g, staged); err != nil {
-		return err
+		return nil, err
 	}
 	f, err := os.Open(staged)
 	if err != nil {
-		return fmt.Errorf("agent: restore %s: open staged object: %w", job.ID, err)
+		return nil, fmt.Errorf("agent: restore %s: open staged object: %w", job.ID, err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -177,27 +199,34 @@ func (r *Restorer) restoreObject(ctx context.Context, job RestoreJob, obj Restor
 	// encrypted): tar.zst for files/volumes, dump.zst/sql.zst for databases.
 	dec, err := zstd.NewReader(payload)
 	if err != nil {
-		return fmt.Errorf("agent: restore %s: object %s: create zstd decoder (wrong key or corrupt data): %w", job.ID, obj.Key, err)
+		return nil, fmt.Errorf("agent: restore %s: object %s: create zstd decoder (wrong key or corrupt data): %w", job.ID, obj.Key, err)
 	}
 	defer dec.Close()
 
+	var matched []string
 	if isTarPayload(job.Kind, obj.Key) {
-		if err := ExtractTar(dec, r.destDir(extractDir(job)), job.OverwriteAllowed(), r.maxExtractBytes()); err != nil {
-			return fmt.Errorf("agent: restore %s: object %s: %w", job.ID, obj.Key, err)
+		m, err := ExtractTarSelective(dec, r.destDir(extractDir(job)), job.OverwriteAllowed(), r.maxExtractBytes(), wants)
+		if err != nil {
+			return nil, fmt.Errorf("agent: restore %s: object %s: %w", job.ID, obj.Key, err)
 		}
+		matched = m
 	} else {
+		if len(wants) > 0 {
+			return nil, fmt.Errorf("agent: restore %s: object %s: selective restore (%d path(s)) needs a file/volume snapshot, got %q",
+				job.ID, obj.Key, len(wants), job.Kind)
+		}
 		name := restoreFileName(job.Kind, obj.Key)
 		if err := WriteRestoreFile(dec, r.destDir(job.Destination.Path), name, job.OverwriteAllowed(), r.maxExtractBytes()); err != nil {
-			return fmt.Errorf("agent: restore %s: object %s: %w", job.ID, obj.Key, err)
+			return nil, fmt.Errorf("agent: restore %s: object %s: %w", job.ID, obj.Key, err)
 		}
 	}
 	// Drain decoder errors (e.g. decrypt failures surfacing mid-stream).
 	if pr, ok := payload.(*pipeReader); ok {
 		if err := pr.Wait(); err != nil {
-			return fmt.Errorf("agent: restore %s: object %s: decrypt: %w", job.ID, obj.Key, err)
+			return nil, fmt.Errorf("agent: restore %s: object %s: decrypt: %w", job.ID, obj.Key, err)
 		}
 	}
-	return nil
+	return matched, nil
 }
 
 // download fetches one presigned URL to staged, verifying size and sha256.
@@ -290,66 +319,190 @@ func restoreFileName(kind, key string) string {
 // total bytes, and refuses to overwrite existing files unless allowOverwrite
 // is set.
 func ExtractTar(r io.Reader, destDir string, allowOverwrite bool, maxTotalBytes int64) error {
+	_, err := ExtractTarSelective(r, destDir, allowOverwrite, maxTotalBytes, nil)
+	return err
+}
+
+// ExtractTarSelective extracts only the tar entries covered by wants (see
+// normalizeRestorePaths); a nil/empty wants extracts everything, exactly
+// like ExtractTar. It returns the normalized wanted paths that had at least
+// one entry extracted, in wants order.
+//
+// Non-matching entries are skipped before any filesystem access, so hostile
+// entries (traversal, absolute paths) outside the selection can neither
+// fail the restore nor escape the destination. Matching entries keep the
+// full protection: safeJoin anchoring, overwrite policy, and byte cap.
+func ExtractTarSelective(r io.Reader, destDir string, allowOverwrite bool, maxTotalBytes int64, wants []string) ([]string, error) {
 	if maxTotalBytes <= 0 {
 		maxTotalBytes = DefaultArchiveMaxBytes
 	}
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return fmt.Errorf("extract: create destination: %w", err)
+		return nil, fmt.Errorf("extract: create destination: %w", err)
 	}
+	selective := len(wants) > 0
+	matched := make(map[string]bool, len(wants))
 	tr := tar.NewReader(r)
 	var total int64
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			return orderedMatched(wants, matched), nil
 		}
 		if err != nil {
-			return fmt.Errorf("extract: read tar entry: %w", err)
+			return nil, fmt.Errorf("extract: read tar entry: %w", err)
+		}
+		if selective {
+			hits := matchRestoreWants(hdr.Name, wants)
+			if len(hits) == 0 {
+				// Skip unselected content; nothing is materialized.
+				_, _ = io.Copy(io.Discard, tr)
+				continue
+			}
+			for _, w := range hits {
+				matched[w] = true
+			}
 		}
 		target, err := safeJoin(destDir, hdr.Name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o755); err != nil {
-				return fmt.Errorf("extract: create dir %s: %w", hdr.Name, err)
+				return nil, fmt.Errorf("extract: create dir %s: %w", hdr.Name, err)
 			}
 		case tar.TypeReg, tar.TypeRegA:
 			if err := checkOverwrite(target, allowOverwrite); err != nil {
-				return err
+				return nil, err
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return fmt.Errorf("extract: create dir: %w", err)
+				return nil, fmt.Errorf("extract: create dir: %w", err)
 			}
 			if err := writeFile(target, tr, hdr, &total, maxTotalBytes); err != nil {
-				return err
+				return nil, err
 			}
 		case tar.TypeSymlink:
 			if err := checkOverwrite(target, allowOverwrite); err != nil {
-				return err
+				return nil, err
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return fmt.Errorf("extract: create dir: %w", err)
+				return nil, fmt.Errorf("extract: create dir: %w", err)
 			}
 			// Confine the link target: absolute links and links escaping
 			// destDir are refused rather than created.
 			linkTarget := hdr.Linkname
 			if filepath.IsAbs(linkTarget) {
-				return fmt.Errorf("extract: symlink %q points to absolute path (refused)", hdr.Name)
+				return nil, fmt.Errorf("extract: symlink %q points to absolute path (refused)", hdr.Name)
 			}
 			resolved := filepath.Join(filepath.Dir(target), linkTarget)
 			if _, err := safeJoin(destDir, mustRel(destDir, resolved)); err != nil {
-				return fmt.Errorf("extract: symlink %q escapes destination (refused)", hdr.Name)
+				return nil, fmt.Errorf("extract: symlink %q escapes destination (refused)", hdr.Name)
 			}
 			if err := os.Symlink(linkTarget, target); err != nil {
-				return fmt.Errorf("extract: create symlink %s: %w", hdr.Name, err)
+				return nil, fmt.Errorf("extract: create symlink %s: %w", hdr.Name, err)
 			}
 		default:
 			// Skip sockets, devices, hardlinks, and other special entries.
 			continue
 		}
 	}
+}
+
+// normalizeRestorePaths cleans and dedupes the requested selective-restore
+// paths (order-preserving). Absolute source paths (the server contract)
+// and archive-relative paths are both accepted; empty, "." and
+// ".."-escaping requests are rejected. Reports use this normalized form.
+func normalizeRestorePaths(paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		c := path.Clean(strings.TrimSpace(p))
+		if c == "" || c == "." {
+			return nil, fmt.Errorf("invalid restore path %q: empty path", p)
+		}
+		if c == ".." || strings.HasPrefix(c, "../") {
+			return nil, fmt.Errorf("invalid restore path %q: must not escape the snapshot root", p)
+		}
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// matchRestoreWants returns the subset of normalized wants covered by one
+// tar entry name: exact hits plus directory prefixes. Absolute wants (e.g.
+// "/srv/data/a.txt") match archive entries ("data/a.txt") by segment-aligned
+// suffix, since archives store entries under the source base name and the
+// agent is not told the source root; archive-relative wants match by exact
+// or dir-prefix comparison. Traversal and absolute entry names can never
+// match: no want cleans to ".." or carries a leading slash past its root.
+func matchRestoreWants(entry string, wants []string) []string {
+	e := path.Clean(strings.TrimPrefix(strings.TrimSpace(entry), "./"))
+	if e == "" || e == "." || e == ".." || strings.HasPrefix(e, "../") || strings.HasPrefix(e, "/") {
+		return nil
+	}
+	var hits []string
+	for _, w := range wants {
+		if strings.HasPrefix(w, "/") {
+			if strings.HasSuffix(w, "/"+e) {
+				hits = append(hits, w)
+				continue
+			}
+			// Directory request: the entry extends a segment-aligned
+			// tail of the want ("/srv/data" covers "data/a.txt").
+			for t := strings.TrimPrefix(w, "/"); ; {
+				if strings.HasPrefix(e, t+"/") {
+					hits = append(hits, w)
+					break
+				}
+				i := strings.Index(t, "/")
+				if i < 0 {
+					break
+				}
+				t = t[i+1:]
+			}
+			continue
+		}
+		if e == w || strings.HasPrefix(e, w+"/") {
+			hits = append(hits, w)
+		}
+	}
+	return hits
+}
+
+// orderedMatched returns the wants present in matched, in wants order.
+func orderedMatched(wants []string, matched map[string]bool) []string {
+	var out []string
+	for _, w := range wants {
+		if matched[w] {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// orderedMissing returns the wants absent from matched, in wants order.
+func orderedMissing(wants []string, matched map[string]bool) []string {
+	var out []string
+	for _, w := range wants {
+		if !matched[w] {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func quoteEach(paths []string) string {
+	q := make([]string, 0, len(paths))
+	for _, p := range paths {
+		q = append(q, fmt.Sprintf("%q", p))
+	}
+	return strings.Join(q, ", ")
 }
 
 func mustRel(base, target string) string {

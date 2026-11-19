@@ -290,7 +290,10 @@ type RestoreJob struct {
 	Destination     RestoreDestination `json:"destination"`
 	OverwritePolicy string             `json:"overwrite_policy"`
 	Objects         []RestoreObject    `json:"objects"`
-	Encryption      RestoreEncryption  `json:"encryption"`
+	// Paths limits the restore to a subset of the snapshot (absolute
+	// source paths, server-validated); empty restores the whole scope.
+	Paths      []string          `json:"paths,omitempty"`
+	Encryption RestoreEncryption `json:"encryption"`
 }
 
 // OverwriteAllowed reports whether existing files may be replaced. Anything
@@ -329,4 +332,9 @@ type DownloadGrantsResponse struct {
 type RestoreReportRequest struct {
 	State string `json:"state"`
 	Error string `json:"error,omitempty"`
+	// RestoredPaths lists requested paths actually extracted (normalized
+	// form); MissingPaths lists requested paths absent from the archive.
+	// Both are empty for full-scope restores.
+	RestoredPaths []string `json:"restored_paths,omitempty"`
+	MissingPaths  []string `json:"missing_paths,omitempty"`
 }
