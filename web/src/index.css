@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* DESIGN section 1: brand + status tokens (RGB channels for alpha support). */
+:root {
+  --primary: 220 38 38; /* #DC2626 red-600 */
+  --primary-hover: 185 28 28; /* #B91C1C red-700 */
+  --primary-fg: 255 255 255; /* #FFFFFF */
+  --destructive: 220 38 38; /* #DC2626 */
+  --success: 22 163 74; /* #16A34A green-600 */
+  --warning: 217 119 6; /* #D97706 amber-600 */
+  --info: 37 99 235; /* #2563EB blue-600 */
+  --background: 255 255 255; /* #FFFFFF */
+  --surface: 249 250 251; /* #F9FAFB */
+  --border: 229 231 235; /* #E5E7EB gray-200 */
+
+  /* DESIGN section 9: motion tokens. */
+  --motion-instant: 100ms;
+  --motion-fast: 150ms ease-out;
+  --motion-base: 200ms ease-out;
+  --motion-slow: 300ms ease-in-out;
+  --motion-pulse: 2s ease-in-out infinite;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-foreground font-sans text-sm antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--primary));
+    outline-offset: 2px;
+  }
+}
+
+/* DESIGN section 9: honor reduced-motion; status pulse is non-essential. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
