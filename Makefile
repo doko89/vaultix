@@ -77,3 +77,22 @@ seed-admin: ## Create/update admin user in the running manager container
 release-build: ## Release manager binary with embedded UI (web build + go build)
 	npm --prefix web run build
 	CGO_ENABLED=0 $(GO) build -o bin/manager ./cmd/manager
+
+.PHONY: release-dry install-check
+
+release-dry: ## Dry-run release binaries (linux/amd64) into dist/ with CI naming
+	mkdir -p dist
+	VERSION="$$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)"; \
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w -X main.version=$$VERSION" -o dist/vaultix-manager-linux-amd64 ./cmd/manager; \
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w -X main.version=$$VERSION" -o dist/vaultix-agent-linux-amd64 ./cmd/agent; \
+	(cd dist && sha256sum vaultix-* > sha256sums.txt); \
+	cat dist/sha256sums.txt
+
+install-check: ## Validate installer scripts (bash -n + shellcheck when available)
+	bash -n install/server.sh
+	bash -n install/worker.sh
+	@if command -v shellcheck >/dev/null; then \
+		shellcheck -S warning install/server.sh install/worker.sh; \
+	else \
+		echo "warning: shellcheck not installed — bash -n passed"; \
+	fi
