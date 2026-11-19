@@ -359,6 +359,47 @@ func TestPollDBCredentialMySQLAndAuditFailure(t *testing.T) {
 	assert.NotContains(t, r.audit.entries[0].Detail, testDBPassword)
 }
 
+func TestPollDBCredentialMSSQLIssuedOverTLSRefusedOverPlaintext(t *testing.T) {
+	r := newProtoRig(t)
+	r.policies.versions["p1@3"].Targets = []domain.BackupPolicyTarget{{
+		ID: "tdb", PolicyID: "p1", Type: domain.TargetMSSQL,
+		Selector: "salesdb", CredentialRef: "db-ms",
+	}}
+	sealDBSecret(t, r, "db-ms", `{"username":"sa_app","password":"`+testDBPassword+`","host":"mssql.internal","port":1433}`)
+	r.seedJob(t, "job-1", "ag-1", domain.JobQueued)
+
+	// Secure channel: same shape as postgres/mysql.
+	tlsCtx := agentshttp.ContextWithTransportSecure(context.Background(), true)
+	queued, err := r.queue.Poll(tlsCtx, "ag-1", 10)
+	require.NoError(t, err)
+	require.Len(t, queued, 1)
+	opts := queued[0].Targets[0].Options
+	require.Contains(t, opts, "db_credential")
+	var cred struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(opts["db_credential"]), &cred))
+	assert.Equal(t, "sa_app", cred.Username)
+	assert.Equal(t, testDBPassword, cred.Password)
+	assert.Equal(t, "mssql.internal", cred.Host)
+	assert.Equal(t, 1433, cred.Port)
+	assert.NotContains(t, opts, "credential_ref")
+	require.Len(t, r.audit.entries, 1)
+	assert.Equal(t, dbCredentialAuditAction, r.audit.entries[0].Action)
+	assert.NotContains(t, r.audit.entries[0].Detail, testDBPassword)
+
+	// Plaintext channel: refused (failed), never dispatched.
+	r.seedJob(t, "job-2", "ag-1", domain.JobQueued)
+	queued, err = r.queue.Poll(context.Background(), "ag-1", 10)
+	require.NoError(t, err)
+	require.Empty(t, queued, "refused items must not dispatch")
+	refusedJob(t, r, "job-2", "TLS", "db-ms")
+	require.Len(t, r.audit.entries, 1, "refused issuance audits nothing")
+}
+
 func TestParseDBCredentialUnits(t *testing.T) {
 	// Padded identifiers trim; passwords stay verbatim.
 	cred, err := parseDBCredential([]byte(`{"username":"  u ","password":"  p  ","host":" h "}`))

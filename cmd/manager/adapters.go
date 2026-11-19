@@ -292,7 +292,7 @@ func (q *agentJobQueue) mapJob(ctx context.Context, j *domain.BackupJob) (agents
 		if opts == nil {
 			opts = map[string]string{}
 		}
-		if t.Type == domain.TargetPostgres || t.Type == domain.TargetMySQL {
+		if t.Type == domain.TargetPostgres || t.Type == domain.TargetMySQL || t.Type == domain.TargetMSSQL {
 			attached, err := q.dbCredentialOptions(ctx, j, t, opts)
 			if err != nil {
 				// Refuse loudly: fail THIS job with the actionable reason
