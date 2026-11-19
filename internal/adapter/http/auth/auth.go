@@ -31,6 +31,10 @@
 //     platform layer for cookie-authenticated mutations.
 //   - Client IP is taken from RemoteAddr; when running behind a trusted
 //     proxy, translate X-Forwarded-For in platform middleware instead.
+//   - API keys: pass the apikey use case as Deps.Keys (it satisfies
+//     KeyVerifier directly) to accept `Authorization: Bearer vxk_...` on
+//     every RequireAuth/RequireRole route; scope→role mapping is
+//     documented on Gate. Session-only routes use RequireSession.
 package auth
 
 import (
@@ -121,11 +125,13 @@ type CookieConfig struct {
 
 // Deps wires Mount. Auth, Users, and Validate are required; Audit may be
 // nil (transport audit disabled); OIDCRedirectURL is required for the OIDC
-// routes; UIRedirectAfterLogin defaults to "/".
+// routes; UIRedirectAfterLogin defaults to "/"; Keys may be nil (API-key
+// bearers disabled — sessions work unchanged).
 type Deps struct {
 	Auth   AuthService
 	Users  UserService
 	Audit  Auditor
+	Keys   KeyVerifier
 	Cookie CookieConfig
 	Clock  domain.Clock
 	// OIDCRedirectURL is the absolute callback URL registered at the IdP.
@@ -176,7 +182,7 @@ func Mount(r Router, deps Deps) *Gate {
 		uiAfter = "/"
 	}
 	h := &handler{
-		gate: &Gate{auth: deps.Auth, cookieName: cookie.Name, clear: clearCookie(cookie)},
+		gate: &Gate{auth: deps.Auth, cookieName: cookie.Name, clear: clearCookie(cookie), keys: deps.Keys},
 		auth: deps.Auth, users: deps.Users, audit: deps.Audit,
 		cookie: cookie, clock: clock,
 		validate: validator.New(validator.WithRequiredStructEnabled()),
