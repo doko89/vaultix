@@ -6,10 +6,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -288,6 +290,23 @@ func (q *agentJobQueue) mapJob(ctx context.Context, j *domain.BackupJob) (agents
 		if opts == nil {
 			opts = map[string]string{}
 		}
+		if t.Type == domain.TargetPostgres || t.Type == domain.TargetMySQL {
+			attached, err := q.dbCredentialOptions(ctx, j, t, opts)
+			if err != nil {
+				// Refuse loudly: fail THIS job with the actionable reason
+				// and drop it from the response so the agent can never
+				// drift into trust auth. Other jobs still dispatch.
+				if ferr := q.refuseJob(ctx, j, err.Error()); ferr != nil {
+					return agentshttp.QueuedJob{}, false, ferr
+				}
+				q.log.Warn("agent poll: refusing job: database credential not issued",
+					"job_id", j.ID, "policy_id", j.PolicyID,
+					"target_type", string(t.Type), "credential_ref", t.CredentialRef,
+					"reason", err.Error())
+				return agentshttp.QueuedJob{}, false, nil
+			}
+			opts = attached
+		}
 		targets = append(targets, agentshttp.JobTarget{
 			Type: string(t.Type), Selector: t.Selector, Options: opts,
 		})
@@ -321,6 +340,199 @@ func projectJobKind(t domain.TargetType) string {
 	default:
 		return string(t)
 	}
+}
+
+// ---- DB credential issuance (PRD §7.7: secrets encrypted at rest,
+// exposed only to the authorized agent for the minimum duration) ----
+
+// dbCredentialAuditAction records DB credential issuance in the audit log.
+// The detail names agent/job/ref/use only — never credential material.
+const dbCredentialAuditAction = domain.AuditAction("db_credential_issue")
+
+// dbCredentialRefusedCode stamps jobs refused at poll time because their
+// database credential could not be issued.
+const dbCredentialRefusedCode = "credential_refused"
+
+// dbCredentialOptionKey is the target-options key carrying the issued
+// credential object on the poll wire shape.
+const dbCredentialOptionKey = "db_credential"
+
+// dbCredential is the short-lived, job-scoped database credential attached
+// to a poll target's options as the "db_credential" value (a JSON object).
+// It is minted per poll over TLS only and must never be logged.
+type dbCredential struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Host     string `json:"host,omitempty"`
+	Port     int    `json:"port,omitempty"`
+}
+
+// dbCredentialOptions resolves t's credential profile and returns a COPY of
+// opts carrying the short-lived "db_credential" object (the pinned version
+// is never mutated). The credential_ref itself is not echoed: the agent
+// gets only the resolved credential for this job.
+//
+// Refusals are secret-free actionable errors (missing ref, insecure
+// channel, unavailable/undecryptable/incomplete profile); callers fail the
+// job with them instead of delivering it for trust auth.
+func (q *agentJobQueue) dbCredentialOptions(ctx context.Context, j *domain.BackupJob, t domain.BackupPolicyTarget, opts map[string]string) (map[string]string, error) {
+	ref := strings.TrimSpace(t.CredentialRef)
+	if ref == "" {
+		return nil, fmt.Errorf("jobproto: job %s: %s target %q carries no credential-profile reference; "+
+			"refusing to run without issued credentials (set credential_ref on the target)",
+			j.ID, t.Type, t.Selector)
+	}
+	// Same gate as key_b64 issuance: call TransportSecure rather than
+	// reading TLS state here, so proxy-aware transports stay in one place.
+	if !agentshttp.TransportSecure(ctx) {
+		return nil, fmt.Errorf("jobproto: job %s: refusing to issue database credential %q "+
+			"over an insecure channel (the agent must poll over TLS)", j.ID, ref)
+	}
+	cred, err := q.keys.openDBCredential(ctx, j.AgentID, j.ID, ref)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(cred)
+	if err != nil {
+		return nil, fmt.Errorf("jobproto: job %s: encode database credential: %v", j.ID, err)
+	}
+	out := make(map[string]string, len(opts)+1)
+	for k, v := range opts {
+		out[k] = v
+	}
+	out[dbCredentialOptionKey] = string(raw)
+	return out, nil
+}
+
+// refuseJob fails one polled job with a secret-free actionable reason: stamp
+// the message, walk the early state forward, then land the terminal report.
+// Polled jobs are assigned, which cannot fail directly (assigned can only
+// reach running/cancelled/queued), hence the walk.
+func (q *agentJobQueue) refuseJob(ctx context.Context, j *domain.BackupJob, reason string) error {
+	outcome := jobuc.Outcome{ErrorCode: dbCredentialRefusedCode, ErrorMessage: reason}
+	if _, err := q.jobs.ReportResult(ctx, j.AgentID, j.ID, outcome); err != nil {
+		return fmt.Errorf("jobproto: refuse job %s: %w", j.ID, err)
+	}
+	if err := q.walkJobTo(ctx, j.ID, domain.JobFailed); err != nil {
+		return fmt.Errorf("jobproto: refuse job %s: %w", j.ID, err)
+	}
+	outcome.State = domain.JobFailed
+	if _, err := q.jobs.ReportResult(ctx, j.AgentID, j.ID, outcome); err != nil {
+		return fmt.Errorf("jobproto: refuse job %s: %w", j.ID, err)
+	}
+	return nil
+}
+
+// openDBCredential resolves a database secret profile into its wire shape.
+// It fails closed with secret-free actionable errors: missing or
+// undecryptable profiles, malformed payloads, missing required fields, and
+// audit failures all withhold the credential. Like openDataKey (jobproto.go),
+// issuance is audited before return — without a trail, no credential.
+func (k *keyIssuer) openDBCredential(ctx context.Context, agentID, jobID, ref string) (dbCredential, error) {
+	var zero dbCredential
+	if k == nil || k.store == nil || k.box == nil {
+		return zero, fmt.Errorf("jobproto: job %s: database credential resolution is not wired", jobID)
+	}
+	log := k.log
+	if log == nil {
+		log = slog.Default()
+	}
+	sec, err := k.store.GetSecret(ctx, ref)
+	if err != nil {
+		log.Warn("db credential issuance: secret profile unavailable",
+			"agent_id", agentID, "job_id", jobID, "credential_ref", ref)
+		return zero, fmt.Errorf("jobproto: job %s: database credential profile %q is unavailable; "+
+			"check the profile still exists and the target's credential_ref is current", jobID, ref)
+	}
+	plain, err := k.box.Open(ctx, sec.Ciphertext, sec.KeyRef)
+	if err != nil {
+		log.Warn("db credential issuance: secret undecryptable",
+			"agent_id", agentID, "job_id", jobID, "credential_ref", ref)
+		return zero, fmt.Errorf("jobproto: job %s: database credential profile %q is undecryptable; "+
+			"rotate the profile to re-seal it under the current key", jobID, ref)
+	}
+	cred, err := parseDBCredential(plain)
+	if err != nil {
+		log.Warn("db credential issuance: profile payload invalid",
+			"agent_id", agentID, "job_id", jobID, "credential_ref", ref)
+		return zero, fmt.Errorf("jobproto: job %s: database credential profile %q is invalid: %v", jobID, ref, err)
+	}
+	if k.audit != nil {
+		if _, err := k.audit.Append(ctx, audituc.Entry{
+			ActorType:  "agent",
+			Action:     dbCredentialAuditAction,
+			TargetType: "secret",
+			TargetID:   ref,
+			Outcome:    audituc.OutcomeOK,
+			Detail:     "agent:" + agentID + " job:" + jobID + " use:poll",
+		}); err != nil {
+			log.Warn("db credential issuance: audit append failed; withholding credential",
+				"agent_id", agentID, "job_id", jobID, "credential_ref", ref)
+			return zero, fmt.Errorf("jobproto: job %s: database credential audit trail failed; refusing issuance", jobID)
+		}
+	}
+	return cred, nil
+}
+
+// parseDBCredential decodes a database secret profile payload. The canonical
+// shape mirrors the wire object: {"username","password","host?","port?"}.
+// Passwords are verbatim (never trimmed); port accepts a JSON number or a
+// numeric string. Errors name the offending field, never its value.
+func parseDBCredential(plain []byte) (dbCredential, error) {
+	var raw struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Host     string `json:"host"`
+		Port     any    `json:"port"`
+	}
+	if err := json.Unmarshal(plain, &raw); err != nil {
+		return dbCredential{}, fmt.Errorf("payload is not valid JSON")
+	}
+	cred := dbCredential{
+		Username: strings.TrimSpace(raw.Username),
+		Password: raw.Password,
+		Host:     strings.TrimSpace(raw.Host),
+	}
+	if cred.Username == "" {
+		return dbCredential{}, fmt.Errorf("missing required field %q", "username")
+	}
+	if cred.Password == "" {
+		return dbCredential{}, fmt.Errorf("missing required field %q", "password")
+	}
+	switch p := raw.Port.(type) {
+	case nil:
+	case float64:
+		if p != float64(int(p)) {
+			return dbCredential{}, fmt.Errorf("field %q must be an integer", "port")
+		}
+		cred.Port = int(p)
+	case string:
+		n, err := parseDBPort(p)
+		if err != nil {
+			return dbCredential{}, err
+		}
+		cred.Port = n
+	default:
+		return dbCredential{}, fmt.Errorf("field %q must be a number", "port")
+	}
+	if cred.Port < 0 || cred.Port > 65535 {
+		return dbCredential{}, fmt.Errorf("field %q is out of range 1..65535", "port")
+	}
+	return cred, nil
+}
+
+// parseDBPort decodes a string-encoded port; "" means unset. Strict: the
+// whole string must be digits (no trailing garbage, no fractions).
+func parseDBPort(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 || n > 65535 {
+		return 0, fmt.Errorf("field %q is out of range 1..65535", "port")
+	}
+	return n, nil
 }
 
 // Report maps the agent's narrow report onto a job outcome. The single
