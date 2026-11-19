@@ -4,6 +4,41 @@ Centralized infrastructure backup platform: a central Manager (web UI, API,
 scheduling, job orchestration) plus a lightweight Agent on each VM that backs
 up files, Docker resources, and databases to S3-compatible storage.
 
+## Quick setup
+
+One-shot installers from the latest GitHub Release (pinned `releases/latest/download`
+URLs — no floating branch):
+
+**1. Manager (server VM).** Installs postgres + manager via Docker Compose into
+`/opt/vaultix`, generates secrets unless provided, waits for `/healthz`:
+
+```bash
+curl -fsSL https://github.com/doko89/vaultix/releases/latest/download/server.sh \
+  | sudo bash -s -- --port 8080
+```
+
+No env is required (`POSTGRES_PASSWORD` / `VAULTIX_CRYPTO_KEY` are generated when
+absent; pass `--version vX.Y.Z` / `--dir DIR` to override). The script prints the
+exact `seed-admin` and enroll-token commands when it finishes. Plain HTTP without
+TLS — local/lab use; see the prod-hardening checklist at the top of the downloaded
+compose file before exposing anything.
+
+**2. Agent (each worker VM).** Installs the agent binary to `/usr/local/bin`,
+redeems the enroll token, writes config + systemd unit, starts the service:
+
+```bash
+curl -fsSL https://github.com/doko89/vaultix/releases/latest/download/worker.sh \
+  | sudo MANAGER_URL=http://<manager-host>:8080 VAULTIX_ENROLL_TOKEN=<token> bash -s --
+```
+
+Required: `MANAGER_URL` (or `--manager`) and `VAULTIX_ENROLL_TOKEN` (or `--token`),
+the single-use token from step 2 of the manager installer's output. Check with
+`systemctl status vaultix-agent` and `journalctl -u vaultix-agent -f`.
+
+Full manual path (migrate → seed admin → login → enroll → first backup → restore)
+is documented in [E2E bootstrap](#e2e-bootstrap) below; dev-stack equivalents live
+under [Dev quickstart](#dev-quickstart).
+
 ## Docs
 
 - `PRD.md` — product requirements
