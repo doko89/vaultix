@@ -278,3 +278,14 @@ Manager boots (API + scheduler + migrations); agent enrollment,
 heartbeat, backup/restore execution, and reporting work end to end; the
 web UI wires all features to the manager API. E2E bootstrap is
 documented above.
+
+## Troubleshooting
+
+**Uploads fail with `403 SignatureDoesNotMatch`, but `aws s3 cp` works.**
+Affected RustFS builds (reported: 1.0.0) reject all SigV4 presigned-URL
+PUTs server-side — see [docs/RUSTFS.md](docs/RUSTFS.md). Prove it with the
+control test: `aws --endpoint-url $ENDPOINT --region us-east-1 s3 cp`
+(positive control, expect success), then `aws ... s3 presign` + `curl -X
+PUT` (expect `HTTP 403` on affected servers). Fix: upgrade to a fixed
+server build; only if query auth is proven broken, opt the destination
+into `upload_mode: direct` (see the doc's warnings first).
