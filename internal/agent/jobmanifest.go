@@ -153,9 +153,11 @@ func (e *Executor) stageBytes(job PolledJob, name string, plain []byte, targetTy
 
 // uploadWithManifest uploads data artifacts, then stages the job manifest
 // (which attests the data keys) and uploads it as a second object. It
-// returns every uploaded object, manifest last.
+// returns every uploaded object, manifest last. Uploads branch on the
+// job's upload mode (presigned by default, direct with header auth when
+// the job carries a destination credential).
 func uploadWithManifest(ctx context.Context, job PolledJob, agentID string, exec *Executor, up *Uploader, arts []*Artifact) ([]UploadedObject, error) {
-	uploaded, err := up.UploadJob(ctx, job.ID, arts)
+	uploaded, err := up.UploadJobFor(ctx, job, arts)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +165,7 @@ func uploadWithManifest(ctx context.Context, job PolledJob, agentID string, exec
 	if err != nil {
 		return nil, err
 	}
-	mup, err := up.UploadJob(ctx, job.ID, []*Artifact{mart})
+	mup, err := up.UploadJobFor(ctx, job, []*Artifact{mart})
 	if err != nil {
 		return nil, err
 	}

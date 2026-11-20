@@ -100,6 +100,28 @@ func (t *Target) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// Upload modes carried on a polled job. Empty (or "presigned") means the
+// classic flow: the agent fetches presigned grants from the manager and
+// PUTs to them. "direct" means the job carries destination credentials and
+// the agent uploads to S3 itself with SigV4 header authentication.
+const (
+	UploadModePresigned = "presigned"
+	UploadModeDirect    = "direct"
+)
+
+// DestinationCredential carries one job's S3 destination access for direct
+// uploads. It rides on the polled job only, is held in memory for the
+// upload, and must never be logged or persisted (same rule as KeyB64).
+type DestinationCredential struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	Endpoint        string `json:"endpoint"`
+	Region          string `json:"region"`
+	Bucket          string `json:"bucket"`
+	UsePathStyle    bool   `json:"use_path_style"`
+	Prefix          string `json:"prefix,omitempty"`
+}
+
 // PolledJob is one dispatchable job from GET /api/agent/poll. Unknown kinds
 // and target types are kept (not rejected) so dispatch can report a
 // structured unsupported error instead of crashing.
@@ -112,6 +134,10 @@ type PolledJob struct {
 	Encryption    EncryptionSpec `json:"encryption"`
 	State         string         `json:"state,omitempty"`
 	Attempt       int            `json:"attempt,omitempty"`
+	// UploadMode selects presigned (default) vs direct upload. Direct
+	// jobs additionally carry DestinationCredential.
+	UploadMode            string                 `json:"upload_mode,omitempty"`
+	DestinationCredential *DestinationCredential `json:"destination_credential,omitempty"`
 }
 
 // EncryptionEnabled reports whether this job requires envelope encryption.
