@@ -291,6 +291,9 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger,
 		Policies: repos.Policies, Jobs: repos.BackupJobs,
 		Snapshots: repos.Snapshots, Stacks: repos.Stacks,
 		Objects: objectHead{objects: registry},
+		// Empty job StorageID means the default destination (the
+		// grants-side contract); completion resolves it the same way.
+		Destinations: repos.Storage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("backup service: %w", err)
