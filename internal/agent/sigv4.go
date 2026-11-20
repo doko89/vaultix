@@ -52,14 +52,28 @@ func (s V4Signer) Wipe() {
 	}
 }
 
-// Sign authenticates req with the S3 header set (host,
-// x-amz-content-sha256, x-amz-date). payloadSHA256Hex is the lowercase hex
-// sha256 of the exact request body. now is the signing instant (UTC).
+// Sign authenticates req with the S3 header set: host,
+// x-amz-content-sha256, x-amz-date, plus every other x-amz-* header already
+// present on the request (e.g. x-amz-meta-checksum). S3 requires ALL x-amz-*
+// headers to be signed — an unsigned one is rejected with 403 AccessDenied
+// ("headers present which were not signed") — so the signed set is derived
+// from the request, mirroring AWS SDK default behavior. Callers must set
+// every header they intend to send BEFORE calling Sign.
+// payloadSHA256Hex is the lowercase hex sha256 of the exact request body.
+// now is the signing instant (UTC).
 func (s V4Signer) Sign(req *http.Request, payloadSHA256Hex string, now time.Time) {
 	stamp := now.UTC().Format(v4DateFormat)
 	req.Header.Set("x-amz-date", stamp)
 	req.Header.Set("x-amz-content-sha256", payloadSHA256Hex)
-	s.signWith(req, payloadSHA256Hex, []string{"host", "x-amz-content-sha256", "x-amz-date"}, stamp)
+	names := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+	for k := range req.Header {
+		lk := strings.ToLower(k)
+		if strings.HasPrefix(lk, "x-amz-") && lk != "x-amz-content-sha256" && lk != "x-amz-date" {
+			names = append(names, lk)
+		}
+	}
+	sort.Strings(names)
+	s.signWith(req, payloadSHA256Hex, names, stamp)
 }
 
 // signWith signs req over the named (lowercase, pre-sorted) headers and

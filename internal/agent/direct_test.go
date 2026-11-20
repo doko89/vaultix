@@ -230,7 +230,19 @@ func verifyS3Signature(t *testing.T, r *http.Request, body []byte, secret, regio
 	}
 	require.Contains(t, fields, "Credential")
 	require.Contains(t, fields, "Signature")
-	require.Equal(t, "host;x-amz-content-sha256;x-amz-date", fields["SignedHeaders"])
+	// The S3 rule, enforced from the request itself: every x-amz-* header
+	// on the wire must appear in SignedHeaders (an unsigned one is
+	// rejected with 403 AccessDenied). The verifier derives the expected
+	// set independently — it does not trust the transmitted list.
+	want := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+	for k := range r.Header {
+		lk := strings.ToLower(k)
+		if strings.HasPrefix(lk, "x-amz-") && lk != "x-amz-content-sha256" && lk != "x-amz-date" {
+			want = append(want, lk)
+		}
+	}
+	sort.Strings(want)
+	require.Equal(t, strings.Join(want, ";"), fields["SignedHeaders"])
 
 	credParts := strings.Split(fields["Credential"], "/")
 	require.Len(t, credParts, 5, "credential scope shape: %q", fields["Credential"])
@@ -282,14 +294,20 @@ func verifyS3Signature(t *testing.T, r *http.Request, body []byte, secret, regio
 			cq.WriteString(escape(v, false))
 		}
 	}
+	var ch strings.Builder
+	for _, n := range want {
+		v := r.Header.Get(n)
+		if n == "host" {
+			v = r.Host
+		}
+		ch.WriteString(n + ":" + v + "\n")
+	}
 	canonical := strings.Join([]string{
 		r.Method,
 		escape(r.URL.EscapedPath(), true),
 		cq.String(),
-		"host:" + r.Host + "\n" +
-			"x-amz-content-sha256:" + payloadHash + "\n" +
-			"x-amz-date:" + amzDate + "\n",
-		"host;x-amz-content-sha256;x-amz-date",
+		ch.String(),
+		strings.Join(want, ";"),
 		payloadHash,
 	}, "\n")
 	csum := sha256.Sum256([]byte(canonical))

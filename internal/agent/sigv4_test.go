@@ -202,6 +202,32 @@ func TestV4Escape(t *testing.T) {
 	assert.Equal(t, "%20%2B%3D", v4Escape(" +=", false), "uppercase hex")
 }
 
+// TestV4SignIncludesPresentAmzHeaders guards the S3 rule that every x-amz-*
+// header on the wire must be signed: Sign folds any x-amz-* header already
+// on the request (e.g. the checksum stamp direct uploads send) into
+// SignedHeaders, while non-amz headers (Content-Type) stay out and the
+// bare-request triple is unchanged.
+func TestV4SignIncludesPresentAmzHeaders(t *testing.T) {
+	when := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	payload := strings.Repeat("a", 64)
+
+	withMeta, err := http.NewRequest(http.MethodPut, "https://h/b/k", nil)
+	require.NoError(t, err)
+	withMeta.Header.Set("x-amz-meta-checksum", "sha256:"+payload)
+	withMeta.Header.Set("Content-Type", "application/xml")
+	NewV4Signer("AKID", []byte("secret"), "us-east-1").Sign(withMeta, payload, when)
+	auth := withMeta.Header.Get("Authorization")
+	assert.Contains(t, auth, "SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-meta-checksum")
+
+	bare, err := http.NewRequest(http.MethodPut, "https://h/b/k", nil)
+	require.NoError(t, err)
+	bare.Header.Set("Content-Type", "application/xml")
+	NewV4Signer("AKID", []byte("secret"), "us-east-1").Sign(bare, payload, when)
+	assert.Contains(t, bare.Header.Get("Authorization"),
+		"SignedHeaders=host;x-amz-content-sha256;x-amz-date,",
+		"bare requests keep the triple; Content-Type stays unsigned")
+}
+
 func TestV4WipeZeroesSecret(t *testing.T) {
 	secret := []byte("super-secret-key")
 	signer := NewV4Signer("AKID", secret, "us-east-1")
