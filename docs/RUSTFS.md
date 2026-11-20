@@ -13,9 +13,11 @@ against an affected server:
 - Vaultix agent uploads in the default `presigned` upload mode (the manager
   mints short-lived presigned PUT grants; the agent PUTs bytes straight to
   storage — see `internal/adapter/s3/doc.go`).
-- Interoperating tools doing the same thing: `aws s3 presign` + `curl`,
-  SDK presigners (`aws-sdk-go-v2`, `boto3`, …), shared/download links —
-  anything that signs into the query string instead of headers.
+- Interoperating tools doing the same thing: SDK PUT presigners
+  (`aws-sdk-go-v2` `PutObject`, boto3 `put_object`, …) + `curl -X PUT` —
+  anything that signs a PUT into the query string instead of headers.
+  (Note: `aws s3 presign` mints GET-only URLs per the AWS CLI reference,
+  so it cannot produce the PUT probe — step 2 below uses boto3.)
 
 Header-auth SigV4 (`aws s3 cp`, SDK clients with static credentials) keeps
 working, which is exactly what makes this defect confusing: credentials,
@@ -29,25 +31,42 @@ buckets, and networking are all fine.
 
 ## Control test (proves it on any S3 endpoint)
 
-Run from any host with AWS CLI v2 and `curl`. Uses placeholders only —
-substitute your endpoint, bucket, and credentials. Use the same region
-your destination is configured with (`us-east-1` below is the common
-default for S3-compatible servers).
+Run from any host with AWS CLI v2, `curl`, and python3 with boto3
+(`pip install boto3` if missing — step 2 needs it). Uses placeholders
+only — substitute your endpoint, bucket, and credentials. Use the same
+region your destination is configured with (`us-east-1` below is the
+common default for S3-compatible servers).
 
 ```bash
 export AWS_ACCESS_KEY_ID=<your-access-key-id>
 export AWS_SECRET_ACCESS_KEY=<your-secret-access-key>
 export AWS_EC2_METADATA_DISABLED=true
 ENDPOINT=http://<s3-host>:9000
+BUCKET=<bucket>
 echo hello > /tmp/vaultix-probe.txt
 
 # 1. Positive control: header-auth upload. Expect success.
 aws --endpoint-url "$ENDPOINT" --region us-east-1 s3 cp \
-  /tmp/vaultix-probe.txt s3://<bucket>/vaultix-probe/header-auth.txt
+  /tmp/vaultix-probe.txt s3://$BUCKET/vaultix-probe/header-auth.txt
 
 # 2. Query-auth probe: presigned PUT. Capture the HTTP status + body.
-URL=$(aws --endpoint-url "$ENDPOINT" --region us-east-1 s3 presign \
-  s3://<bucket>/vaultix-probe/query-auth.txt --expires-in 300)
+# `aws s3 presign` MUST NOT be used here: it mints GET-only URLs, and
+# PUTing to a GET-signed URL fails with SignatureDoesNotMatch on every
+# server (including AWS) — a false positive. Mint a real PUT URL:
+URL=$(python3 - "$ENDPOINT" "$BUCKET" <<'EOF'
+import boto3, os, sys
+from botocore.config import Config
+endpoint, bucket = sys.argv[1], sys.argv[2]
+s3 = boto3.client('s3', endpoint_url=endpoint,
+    region_name='us-east-1',
+    aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+    aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+    config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}))
+print(s3.generate_presigned_url('put_object',
+    Params={'Bucket': bucket, 'Key': 'vaultix-probe/query-auth.txt'},
+    ExpiresIn=300))
+EOF
+)
 curl -sS -o /tmp/vaultix-presign-resp.txt -w 'HTTP %{http_code}\n' \
   -X PUT --upload-file /tmp/vaultix-probe.txt "$URL"
 cat /tmp/vaultix-presign-resp.txt
@@ -63,7 +82,10 @@ Reading the outcome:
 
 (If your endpoint uses a self-signed cert, add `--no-verify-ssl` to the
 `aws` commands and `-k` to the `curl` command. If step 1 fails with an
-addressing error, retry with `AWS_S3_ADDRESSING_STYLE=path` exported.)
+addressing error, the CLI is attempting virtual-hosted style: run
+`aws configure set s3.addressing_style path` first — there is no
+`AWS_S3_ADDRESSING_STYLE` env var, the config file is the only switch.
+The boto3 snippet in step 2 already pins path style.)
 
 ## Remediation decision tree
 
@@ -88,7 +110,9 @@ addressing error, retry with `AWS_S3_ADDRESSING_STYLE=path` exported.)
        returns `403 SignatureDoesNotMatch`.** It is a workaround for a
        server defect, not a performance or convenience option.
 
-> Field-name note: `upload_mode: presigned|direct` (default `presigned`)
-> documents the intended end state being built alongside this doc; exact
-> placement/shape follows the credential-issuance track and this file will
-> be reconciled to it at integration.
+> Field-name note (verified at integration): the destination-level field
+> is `upload_mode: presigned|direct` (default `presigned`, API + storage),
+> and a polled direct-mode job carries `upload_mode: "direct"` plus a
+> seven-field `destination_credential` (`access_key_id`,
+> `secret_access_key`, `endpoint`, `region`, `bucket`, `use_path_style`,
+> `prefix`).

@@ -285,7 +285,9 @@ documented above.
 Affected RustFS builds (reported: 1.0.0) reject all SigV4 presigned-URL
 PUTs server-side — see [docs/RUSTFS.md](docs/RUSTFS.md). Prove it with the
 control test: `aws --endpoint-url $ENDPOINT --region us-east-1 s3 cp`
-(positive control, expect success), then `aws ... s3 presign` + `curl -X
-PUT` (expect `HTTP 403` on affected servers). Fix: upgrade to a fixed
+(positive control, expect success), then a boto3-minted presigned PUT +
+`curl -X PUT` (expect `HTTP 403` on affected servers — note `aws s3
+presign` is GET-only and must not be used for the PUT probe). Fix:
+upgrade to a fixed
 server build; only if query auth is proven broken, opt the destination
 into `upload_mode: direct` (see the doc's warnings first).
