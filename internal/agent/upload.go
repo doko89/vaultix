@@ -172,10 +172,10 @@ func (u *Uploader) putOnce(ctx context.Context, path string, g UploadGrant, sha2
 		return fmt.Errorf("PUT %s: %w", redactURL(g.URL), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodyByte))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("PUT %s: status %s", redactURL(g.URL), resp.Status)
+		return putStatusError(http.MethodPut, g.URL, resp)
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
@@ -272,14 +272,14 @@ func (u *Uploader) putPartOnce(ctx context.Context, partURL string, body []byte)
 		return "", fmt.Errorf("PUT %s: %w", redactURL(partURL), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodyByte))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("PUT %s: status %s", redactURL(partURL), resp.Status)
+		return "", putStatusError(http.MethodPut, partURL, resp)
 	}
 	etag := strings.Trim(resp.Header.Get("ETag"), `"`)
 	if etag == "" {
 		return "", fmt.Errorf("PUT %s: missing ETag in response", redactURL(partURL))
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return etag, nil
 }
 
