@@ -103,3 +103,22 @@ accepted behavior gap, no fix in this batch. Revisit per item below.
   are requested (`isManifestObject` in `internal/agent/restore.go`,
   covered by `TestRestoreExecuteSelectiveSkipsManifestObject`).
   Full-scope restores still materialize the sidecar (F8c above).
+
+---
+
+# RustFS presigned-URL workaround (issue #1, 2026-11-20)
+
+- Issue: RustFS 1.0.0 rejects ALL SigV4 query-auth presigned PUTs with 403
+  SignatureDoesNotMatch — https://github.com/doko89/vaultix/issues/1.
+  Server-side defect (AWS-CLI-generated URLs fail too); header auth works.
+  Full write-up + control test: `docs/RUSTFS.md`.
+- Workaround status: opt-in `upload_mode: direct` on the destination
+  (default stays `presigned`); the manager issues per-job destination
+  credentials to the agent instead of minting presigned grants. Enable
+  only after the control test proves query auth broken — credential
+  material leaves the manager per job, needs TLS end to end, and weakens
+  per-URL audit attribution.
+- Retire when: RustFS ships a query-auth fix AND this repo records a
+  verified-against-fixed-version note (control test step 2 returning
+  HTTP 200 against the fixed build), or when affected versions are
+  desupported — then remove the `direct` path and this entry.
