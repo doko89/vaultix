@@ -313,7 +313,7 @@ func (q *agentJobQueue) mapJob(ctx context.Context, j *domain.BackupJob) (agents
 			Type: string(t.Type), Selector: t.Selector, Options: opts,
 		})
 	}
-	return agentshttp.QueuedJob{
+	qj := agentshttp.QueuedJob{
 		ID:            j.ID,
 		PolicyID:      j.PolicyID,
 		PolicyVersion: j.PolicyVersion,
@@ -322,7 +322,24 @@ func (q *agentJobQueue) mapJob(ctx context.Context, j *domain.BackupJob) (agents
 		State:         string(j.State),
 		Attempt:       j.Attempt,
 		Encryption:    q.jobEncryption(ctx, j.AgentID, v),
-	}, true, nil
+	}
+	// Direct-upload enrichment: presigned destinations (and unresolvable
+	// ones, which keep today's grant-time behavior) return nil and leave
+	// the wire shape untouched. A direct destination whose credential
+	// cannot be issued refuses THIS job loudly, like db_credential above:
+	// fail it with the actionable reason and drop it from the response so
+	// the agent can neither silently fall back to (broken) presigned PUTs
+	// nor upload without credentials. Other jobs still dispatch.
+	if err := q.attachDirectUpload(ctx, j, &qj); err != nil {
+		if ferr := q.refuseJobWithCode(ctx, j, directUploadRefusedCode, err.Error()); ferr != nil {
+			return agentshttp.QueuedJob{}, false, ferr
+		}
+		q.log.Warn("agent poll: refusing job: direct-upload credential not issued",
+			"job_id", j.ID, "policy_id", j.PolicyID,
+			"reason", err.Error())
+		return agentshttp.QueuedJob{}, false, nil
+	}
+	return qj, true, nil
 }
 
 // projectJobKind maps the first pinned target type onto the agent runtime's
@@ -411,7 +428,14 @@ func (q *agentJobQueue) dbCredentialOptions(ctx context.Context, j *domain.Backu
 // Polled jobs are assigned, which cannot fail directly (assigned can only
 // reach running/cancelled/queued), hence the walk.
 func (q *agentJobQueue) refuseJob(ctx context.Context, j *domain.BackupJob, reason string) error {
-	outcome := jobuc.Outcome{ErrorCode: dbCredentialRefusedCode, ErrorMessage: reason}
+	return q.refuseJobWithCode(ctx, j, dbCredentialRefusedCode, reason)
+}
+
+// refuseJobWithCode is refuseJob with an explicit terminal error code so
+// distinct poll-time refusals (db_credential vs direct-upload) stay
+// distinguishable to operators.
+func (q *agentJobQueue) refuseJobWithCode(ctx context.Context, j *domain.BackupJob, code, reason string) error {
+	outcome := jobuc.Outcome{ErrorCode: code, ErrorMessage: reason}
 	if _, err := q.jobs.ReportResult(ctx, j.AgentID, j.ID, outcome); err != nil {
 		return fmt.Errorf("jobproto: refuse job %s: %w", j.ID, err)
 	}
@@ -535,6 +559,169 @@ func parseDBPort(s string) (int, error) {
 		return 0, fmt.Errorf("field %q is out of range 1..65535", "port")
 	}
 	return n, nil
+}
+
+// ---- Direct-upload credential issuance (PRD §7.12 opt-in exception) ----
+//
+// WARNING to operators: a destination with upload_mode "direct" hands its
+// FULL S3 access-key pair to the agent on every poll (TLS only). This is the
+// explicit per-destination exception to PRD §7.12 "never expose long-lived
+// creds to agents", for S3 implementations with broken SigV4 query auth
+// (presigned PUTs rejected with 403 while header auth works — e.g. RustFS
+// 1.0.0). Use it only for such implementations: anyone who can read a poll
+// response (or compromise the agent host) owns the bucket. Agents upload
+// with header auth and build keys themselves under the same
+// <prefix>/jobs/<jobID>/<name> rule the grant path uses; presigned upload
+// grants are refused for direct destinations (see jobproto.go), so agents
+// that predate direct mode fail loudly at the grant step instead of eating
+// cryptic storage 403s.
+
+// directUploadAuditAction records direct-upload credential issuance in the
+// audit log. The detail names agent/job/destination refs only — never
+// credential material.
+const directUploadAuditAction = domain.AuditAction("direct_upload_credential_issue")
+
+// directUploadRefusedCode stamps jobs refused at poll time because their
+// direct-upload credential could not be issued.
+const directUploadRefusedCode = "direct_upload_refused"
+
+// destinationForQueueJob resolves the job's storage destination for poll
+// enrichment, mirroring the grant/completion contract (backup
+// resolveStorageID, agentDataPlane.destinationForJob): the job's pinned
+// StorageID wins untouched; an empty one resolves the default destination.
+// Storage rows come from the key issuer's store, which is the same
+// StorageRepository the rest of poll issuance already uses.
+func (q *agentJobQueue) destinationForQueueJob(ctx context.Context, j *domain.BackupJob) (*domain.StorageDestination, error) {
+	if q == nil || q.keys == nil || q.keys.store == nil {
+		return nil, fmt.Errorf("jobproto: job %s: storage resolution is not wired", j.ID)
+	}
+	if strings.TrimSpace(j.StorageID) != "" {
+		return q.keys.store.GetDestination(ctx, j.StorageID)
+	}
+	return q.keys.store.GetDefaultDestination(ctx)
+}
+
+// attachDirectUpload enriches a queued job for direct-mode destinations. It
+// returns nil (leaving qj untouched) for presigned destinations, legacy
+// rows without a mode, and unresolvable destinations — the latter keep
+// today's behavior of failing later at the grant step, so the presigned
+// path is completely unchanged. For a resolved direct destination it gates
+// on the secure transport and attaches upload_mode "direct" plus the
+// seven-field destination_credential; any issuance failure (insecure
+// channel, missing/undecryptable/incomplete profile, audit failure) is a
+// secret-free actionable error the caller turns into a loud per-job
+// refusal — never a silent presigned fallback.
+func (q *agentJobQueue) attachDirectUpload(ctx context.Context, j *domain.BackupJob, qj *agentshttp.QueuedJob) error {
+	dest, err := q.destinationForQueueJob(ctx, j)
+	if err != nil || dest == nil {
+		return nil
+	}
+	if dest.NormalizedUploadMode() != domain.UploadModeDirect {
+		return nil
+	}
+	// Same gate as key_b64/db_credential issuance: call TransportSecure
+	// rather than reading TLS state here, so proxy-aware transports stay
+	// in one place.
+	if !agentshttp.TransportSecure(ctx) {
+		return fmt.Errorf("jobproto: job %s: refusing to issue direct-upload credential for destination %q "+
+			"over an insecure channel (the agent must poll over TLS)", j.ID, dest.Name)
+	}
+	cred, err := q.keys.openDestinationCredential(ctx, j, dest)
+	if err != nil {
+		return err
+	}
+	qj.UploadMode = string(domain.UploadModeDirect)
+	qj.DestinationCredential = &cred
+	return nil
+}
+
+// openDestinationCredential resolves a direct-mode destination's credential
+// profile into its seven-field wire shape. It fails closed with secret-free
+// actionable errors: missing/undecryptable profiles, malformed payloads,
+// missing required fields, and audit failures all withhold the credential.
+// Like openDBCredential, issuance is audited before return — without a
+// trail, no credential.
+func (k *keyIssuer) openDestinationCredential(ctx context.Context, j *domain.BackupJob, dest *domain.StorageDestination) (agentshttp.DestinationCredential, error) {
+	var zero agentshttp.DestinationCredential
+	if k == nil || k.store == nil || k.box == nil {
+		return zero, fmt.Errorf("jobproto: job %s: direct-upload credential resolution is not wired", j.ID)
+	}
+	log := k.log
+	if log == nil {
+		log = slog.Default()
+	}
+	ref := strings.TrimSpace(dest.CredentialRef)
+	if ref == "" {
+		log.Warn("direct-upload issuance: destination has no credential profile",
+			"agent_id", j.AgentID, "job_id", j.ID, "destination_id", dest.ID)
+		return zero, fmt.Errorf("jobproto: job %s: destination %q uses direct upload but has no credential-profile reference; "+
+			"refusing to dispatch without issued credentials (set credential_ref on the destination or switch upload_mode back to %q)",
+			j.ID, dest.Name, string(domain.UploadModePresigned))
+	}
+	sec, err := k.store.GetSecret(ctx, ref)
+	if err != nil {
+		log.Warn("direct-upload issuance: secret profile unavailable",
+			"agent_id", j.AgentID, "job_id", j.ID, "credential_ref", ref)
+		return zero, fmt.Errorf("jobproto: job %s: direct-upload credential profile %q is unavailable; "+
+			"check the profile still exists and the destination's credential_ref is current", j.ID, ref)
+	}
+	plain, err := k.box.Open(ctx, sec.Ciphertext, sec.KeyRef)
+	if err != nil {
+		log.Warn("direct-upload issuance: secret undecryptable",
+			"agent_id", j.AgentID, "job_id", j.ID, "credential_ref", ref)
+		return zero, fmt.Errorf("jobproto: job %s: direct-upload credential profile %q is undecryptable; "+
+			"rotate the profile to re-seal it under the current key", j.ID, ref)
+	}
+	accessKeyID, secretAccessKey, err := parseStorageCredential(plain)
+	if err != nil {
+		log.Warn("direct-upload issuance: profile payload invalid",
+			"agent_id", j.AgentID, "job_id", j.ID, "credential_ref", ref)
+		return zero, fmt.Errorf("jobproto: job %s: direct-upload credential profile %q is invalid: %v", j.ID, ref, err)
+	}
+	if k.audit != nil {
+		if _, err := k.audit.Append(ctx, audituc.Entry{
+			ActorType:  "agent",
+			Action:     directUploadAuditAction,
+			TargetType: "secret",
+			TargetID:   ref,
+			Outcome:    audituc.OutcomeOK,
+			Detail:     "agent:" + j.AgentID + " job:" + j.ID + " dest:" + dest.ID + " use:poll-direct",
+		}); err != nil {
+			log.Warn("direct-upload issuance: audit append failed; withholding credential",
+				"agent_id", j.AgentID, "job_id", j.ID, "credential_ref", ref)
+			return zero, fmt.Errorf("jobproto: job %s: direct-upload credential audit trail failed; refusing issuance", j.ID)
+		}
+	}
+	return agentshttp.DestinationCredential{
+		AccessKeyID:     accessKeyID,
+		SecretAccessKey: secretAccessKey,
+		Endpoint:        dest.Endpoint,
+		Region:          dest.Region,
+		Bucket:          dest.Bucket,
+		UsePathStyle:    dest.UsePathStyle,
+		Prefix:          dest.Prefix,
+	}, nil
+}
+
+// parseStorageCredential decodes a storage secret profile payload. The
+// canonical shape mirrors the S3 resolver's (serve.go s3ResolveFunc):
+// {"access_key_id","secret_access_key"}. The secret is verbatim (never
+// trimmed); errors name the offending field, never its value.
+func parseStorageCredential(plain []byte) (accessKeyID, secretAccessKey string, err error) {
+	var raw struct {
+		AccessKeyID     string `json:"access_key_id"`
+		SecretAccessKey string `json:"secret_access_key"`
+	}
+	if err := json.Unmarshal(plain, &raw); err != nil {
+		return "", "", fmt.Errorf("payload is not valid JSON")
+	}
+	if strings.TrimSpace(raw.AccessKeyID) == "" {
+		return "", "", fmt.Errorf("missing required field %q", "access_key_id")
+	}
+	if raw.SecretAccessKey == "" {
+		return "", "", fmt.Errorf("missing required field %q", "secret_access_key")
+	}
+	return strings.TrimSpace(raw.AccessKeyID), raw.SecretAccessKey, nil
 }
 
 // Report maps the agent's narrow report onto a job outcome. The single

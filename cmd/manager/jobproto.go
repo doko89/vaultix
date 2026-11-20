@@ -326,6 +326,22 @@ func isScopedKey(prefix, key string) bool {
 	return false
 }
 
+// rejectDirectUploadGrant refuses presigned-upload issuance for direct-mode
+// destinations. Direct agents never reach this path (they PUT with the
+// per-job credential issued at poll); only agents that predate direct mode
+// do, and they fail here loudly with an actionable error instead of eating
+// cryptic storage 403s from broken query auth. Download grants (restores)
+// are unaffected: restores still use presigned GETs.
+func rejectDirectUploadGrant(dest *domain.StorageDestination) error {
+	if dest != nil && dest.NormalizedUploadMode() == domain.UploadModeDirect {
+		return fmt.Errorf("jobproto: destination %q uses direct upload (upload_mode %q): presigned upload grants are disabled; "+
+			"the agent uploads with the per-job credential issued at poll (agents that reach this path predate direct mode — "+
+			"upgrade the agent or set upload_mode back to %q): %w",
+			dest.Name, string(domain.UploadModeDirect), string(domain.UploadModePresigned), domain.ErrConflict)
+	}
+	return nil
+}
+
 // IssueUploadGrants mints one PUT grant per object, strictly bound to the
 // job's scope.
 func (p *agentDataPlane) IssueUploadGrants(ctx context.Context, agentID, jobID string, objects []agentshttp.UploadObjectRequest) ([]agentshttp.ObjectGrant, error) {
@@ -338,6 +354,9 @@ func (p *agentDataPlane) IssueUploadGrants(ctx context.Context, agentID, jobID s
 	}
 	dest, err := p.destinationForJob(ctx, job)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectDirectUploadGrant(dest); err != nil {
 		return nil, err
 	}
 	out := make([]agentshttp.ObjectGrant, 0, len(objects))
@@ -386,6 +405,9 @@ func (p *agentDataPlane) InitMultipartUpload(ctx context.Context, agentID, jobID
 	}
 	dest, err := p.destinationForJob(ctx, job)
 	if err != nil {
+		return "", "", nil, err
+	}
+	if err := rejectDirectUploadGrant(dest); err != nil {
 		return "", "", nil, err
 	}
 	rel, err := relativeObject(dest.Prefix, jobID, object)

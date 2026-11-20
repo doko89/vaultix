@@ -27,6 +27,24 @@ type JobTarget struct {
 	Options  map[string]string `json:"options"`
 }
 
+// DestinationCredential is the per-job direct-upload credential issued at
+// poll for destinations with upload_mode "direct" (explicit per-destination
+// opt-in exception to PRD §7.12 "never expose long-lived creds to agents";
+// use only for S3 implementations with broken query auth). All seven fields
+// are always present when the object is present. It is minted per poll over
+// TLS only and must never be logged. Agents that predate direct mode ignore
+// it (unknown JSON field) and fail loudly at the presigned-grant step,
+// which direct destinations refuse.
+type DestinationCredential struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	Endpoint        string `json:"endpoint"`
+	Region          string `json:"region"`
+	Bucket          string `json:"bucket"`
+	UsePathStyle    bool   `json:"use_path_style"`
+	Prefix          string `json:"prefix"`
+}
+
 // QueuedJob is the dispatch slice of a job handed to a polling agent. It is
 // intentionally narrow: the jobs track owns the full job model and maps it
 // onto this shape.
@@ -39,6 +57,14 @@ type QueuedJob struct {
 	State         string        `json:"state"`
 	Attempt       int           `json:"attempt"`
 	Encryption    JobEncryption `json:"encryption"`
+	// UploadMode is "direct" when the job's resolved destination opts into
+	// direct upload, in which case DestinationCredential carries the
+	// per-job S3 credential. Both are omitted for presigned destinations
+	// (and legacy rows without a mode), so the presigned poll shape is
+	// byte-identical to before direct mode existed; agents treat an absent
+	// mode as presigned.
+	UploadMode            string                 `json:"upload_mode,omitempty"`
+	DestinationCredential *DestinationCredential `json:"destination_credential,omitempty"`
 }
 
 // ManifestObject is one flat manifest entry: storage key, stored bytes, hex
