@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/vaultix/vaultix/internal/domain"
@@ -13,16 +14,20 @@ import (
 // Service orchestrates target resolution, manifest assembly, and the
 // completion verification gate.
 type Service struct {
-	policies  domain.PolicyRepository
-	jobs      domain.BackupJobRepository
-	snapshots domain.SnapshotRepository
-	stacks    domain.StackRepository
-	objects   ObjectAccess
-	clock     domain.Clock
-	newID     func() string
+	policies     domain.PolicyRepository
+	jobs         domain.BackupJobRepository
+	snapshots    domain.SnapshotRepository
+	stacks       domain.StackRepository
+	objects      ObjectAccess
+	destinations DefaultDestinationStore
+	clock        domain.Clock
+	newID        func() string
+	log          *slog.Logger
 }
 
-// Deps wires a Service. Clock and IDGen are optional test seams.
+// Deps wires a Service. Clock, IDGen, and Logger are optional test seams;
+// Destinations is optional too — required only when completing jobs whose
+// StorageID is empty (empty means the default destination).
 type Deps struct {
 	Policies  domain.PolicyRepository
 	Jobs      domain.BackupJobRepository
@@ -30,8 +35,11 @@ type Deps struct {
 	Stacks    domain.StackRepository
 	Objects   ObjectAccess
 
-	Clock domain.Clock
-	IDGen func() string
+	Destinations DefaultDestinationStore
+
+	Clock  domain.Clock
+	IDGen  func() string
+	Logger *slog.Logger
 }
 
 // New builds a Service, rejecting nil required dependencies.
@@ -47,9 +55,14 @@ func New(d Deps) (*Service, error) {
 	if newID == nil {
 		newID = randomID
 	}
+	log := d.Logger
+	if log == nil {
+		log = slog.Default()
+	}
 	return &Service{
 		policies: d.Policies, jobs: d.Jobs, snapshots: d.Snapshots,
-		stacks: d.Stacks, objects: d.Objects, clock: clock, newID: newID,
+		stacks: d.Stacks, objects: d.Objects, destinations: d.Destinations,
+		clock: clock, newID: newID, log: log,
 	}, nil
 }
 
@@ -98,6 +111,15 @@ func (s *Service) CompleteJob(ctx context.Context, jobID string, report Completi
 // if the manifest and ALL required objects verify; anything else fails the
 // job with a *CompletionError.
 func (s *Service) runCompletion(ctx context.Context, job *domain.BackupJob, compression domain.Compression, report CompletionReport) (*VerificationResult, error) {
+	// Resolve the destination once, before anything is stamped: an empty
+	// job StorageID means the default destination (the grants-side
+	// contract), and the resolved ID is what the snapshot record carries
+	// and every verify HEAD targets.
+	storageID, err := s.resolveStorageID(ctx, job)
+	if err != nil {
+		return nil, s.failJob(ctx, job, "destination_missing", err.Error())
+	}
+	job.StorageID = storageID
 	now := s.clock.Now()
 	job.UpdatedAt = now
 	snap, manifest, objects, err := AssembleManifest(ManifestInput{

@@ -76,15 +76,24 @@ accepted behavior gap, no fix in this batch. Revisit per item below.
   the restore destination alongside restored data. All cosmetic /
   hygiene; (b) has a mild secret-exposure flavor — scrub URLs from
   errors before any externally-visible deployment.
-- NEW (integrator-4 live finding, 2026-11-19): the backup verify gate
-  does not fall back to the default destination — a policy/job with
-  empty `storage_id` uploads fine (grants resolve the default) but
-  verify-then-complete fails with `head_error (s3: destination id is
-  required)`, so the job can never succeed. Workaround (used by this
-  re-verification): always set `storage_id` explicitly on policies.
-  Fix direction: resolve the default destination in
-  `CompleteJobFlat`/verify like `destinationForJob` already does for
-  grants, or reject empty-`storage_id` policies at the boundary.
+- [resolved 2026-11-20, feat/verify-default-dest] (integrator-4 live
+  finding, 2026-11-19): the backup verify gate did not fall back to
+  the default destination — a policy/job with empty `storage_id`
+  uploaded fine (grants resolve the default) but verify-then-complete
+  failed with `head_error (s3: destination id is required)`, so the
+  job could never succeed. Fix (the recorded direction, boundary
+  rejection deliberately NOT taken — empty means default per
+  `internal/domain/policy.go`): `runCompletion` now resolves the
+  default destination once via the narrow `DefaultDestinationStore`
+  seam (`internal/usecase/backup/destinations.go`, wired to
+  `repos.Storage` in `cmd/manager/serve.go`), stamps the resolved ID
+  on the job/snapshot records, and every verify HEAD targets it; with
+  no default configured the job fails once with code
+  `destination_missing` naming the remediation ("set storage_id on
+  the policy or configure a default destination"). Covered by
+  `internal/usecase/backup/destinations_test.go` (empty+default
+  succeeds on both completion paths, no-default fails actionably,
+  explicit path untouched).
 - FIXED live (integrator-4, 2026-11-19, in the `chore: integrator-4
   merge fallout and tech-debt log` commit): selective restores
   failed on the `manifest.json` metadata sidecar
