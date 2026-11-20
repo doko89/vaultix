@@ -11,13 +11,15 @@ import (
 // StorageRepo implements domain.StorageRepository on
 // storage_destinations/secret_profiles.
 //
-// Mapping notes: CredentialRef and UsePathStyle live in the auth JSON
-// object (references only, never secret values). Exactly one destination
-// should be default; creating or updating a default clears the flag on all
-// others in the same transaction. Secret ciphertext is base64-encoded into
-// secret_encrypted; SecretKind round-trips via the description column
-// because the owner_type check has no encryption/generic values. List
-// queries never select secret_encrypted (ListSecrets returns Ciphertext nil).
+// Mapping notes: CredentialRef, UsePathStyle, and UploadMode live in the
+// auth JSON object (references and behavior flags only, never secret
+// values). Exactly one destination should be default; creating or updating
+// a default clears the flag on all others in the same transaction. Secret
+// ciphertext is base64-encoded into secret_encrypted; SecretKind round-trips
+// via the description column because the owner_type check has no
+// encryption/generic values. List queries never select secret_encrypted
+// (ListSecrets returns Ciphertext nil). Legacy auth objects without
+// upload_mode read back as presigned (see mapDestination).
 type StorageRepo struct {
 	baseRepo
 }
@@ -27,6 +29,9 @@ type StorageRepo struct {
 type storageAuth struct {
 	CredentialRef string `json:"credential_ref,omitempty"`
 	UsePathStyle  bool   `json:"use_path_style,omitempty"`
+	// UploadMode rides the auth object (not a column) so the direct-upload
+	// opt-in needs no schema migration; empty means presigned.
+	UploadMode string `json:"upload_mode,omitempty"`
 }
 
 // CreateDestination inserts a storage destination. The ID is
@@ -38,7 +43,7 @@ func (r *StorageRepo) CreateDestination(ctx context.Context, d *domain.StorageDe
 	if err := d.Validate(); err != nil {
 		return err
 	}
-	auth, err := encodeJSON(storageAuth{CredentialRef: d.CredentialRef, UsePathStyle: d.UsePathStyle})
+	auth, err := encodeJSON(storageAuth{CredentialRef: d.CredentialRef, UsePathStyle: d.UsePathStyle, UploadMode: string(d.UploadMode)})
 	if err != nil {
 		return err
 	}
@@ -128,7 +133,7 @@ func (r *StorageRepo) UpdateDestination(ctx context.Context, d *domain.StorageDe
 	if err != nil {
 		return err
 	}
-	auth, err := encodeJSON(storageAuth{CredentialRef: d.CredentialRef, UsePathStyle: d.UsePathStyle})
+	auth, err := encodeJSON(storageAuth{CredentialRef: d.CredentialRef, UsePathStyle: d.UsePathStyle, UploadMode: string(d.UploadMode)})
 	if err != nil {
 		return err
 	}
@@ -290,6 +295,14 @@ func mapDestination(row gen.StorageDestination) (domain.StorageDestination, erro
 	if err := decodeJSON(row.Auth, &auth); err != nil {
 		return domain.StorageDestination{}, err
 	}
+	// Legacy rows predate upload_mode: their auth object omits the key and
+	// they behave as presigned. Unknown stored values pass through untouched;
+	// issuance only fires on the exact "direct" value, so garbage can never
+	// widen into credential issuance (fail closed).
+	mode := domain.UploadMode(auth.UploadMode)
+	if mode == "" {
+		mode = domain.UploadModePresigned
+	}
 	return domain.StorageDestination{
 		ID:            uuidString(row.ID),
 		Name:          row.Name,
@@ -299,6 +312,7 @@ func mapDestination(row gen.StorageDestination) (domain.StorageDestination, erro
 		Prefix:        row.Prefix,
 		CredentialRef: auth.CredentialRef,
 		UsePathStyle:  auth.UsePathStyle,
+		UploadMode:    mode,
 		Default:       row.IsDefault,
 		CreatedAt:     timeOrZero(row.CreatedAt),
 		UpdatedAt:     timeOrZero(row.UpdatedAt),

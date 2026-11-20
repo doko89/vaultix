@@ -10,7 +10,11 @@ import (
 )
 
 // Destination inputs. Endpoint/region/prefix are optional (empty endpoint
-// selects the AWS default); bucket follows S3 naming rules.
+// selects the AWS default); bucket follows S3 naming rules. UploadMode
+// defaults to presigned when empty; "direct" is the explicit per-destination
+// opt-in that hands per-job S3 credentials to the agent (see
+// domain.UploadMode) and must only be used for S3 implementations with
+// broken query auth.
 type CreateDestinationInput struct {
 	Name          string
 	Endpoint      string
@@ -19,6 +23,7 @@ type CreateDestinationInput struct {
 	Prefix        string
 	CredentialRef string
 	UsePathStyle  bool
+	UploadMode    domain.UploadMode
 	Default       bool
 }
 
@@ -32,7 +37,19 @@ type UpdateDestinationInput struct {
 	Prefix        string
 	CredentialRef string
 	UsePathStyle  bool
+	UploadMode    domain.UploadMode
 	Default       bool
+}
+
+// normalizeUploadMode trims the requested mode and defaults empty to
+// presigned. Anything else is rejected downstream by domain validation with
+// an actionable error naming both legal values.
+func normalizeUploadMode(m domain.UploadMode) domain.UploadMode {
+	m = domain.UploadMode(strings.TrimSpace(string(m)))
+	if m == "" {
+		return domain.UploadModePresigned
+	}
+	return m
 }
 
 // CreateDestination validates and persists a new destination.
@@ -46,6 +63,7 @@ func (s *Service) CreateDestination(ctx context.Context, in CreateDestinationInp
 		Prefix:        strings.Trim(strings.TrimSpace(in.Prefix), "/"),
 		CredentialRef: strings.TrimSpace(in.CredentialRef),
 		UsePathStyle:  in.UsePathStyle,
+		UploadMode:    normalizeUploadMode(in.UploadMode),
 		Default:       in.Default,
 		CreatedAt:     s.clock.Now().UTC(),
 	}
@@ -94,6 +112,7 @@ func (s *Service) UpdateDestination(ctx context.Context, in UpdateDestinationInp
 		Prefix:        strings.Trim(strings.TrimSpace(in.Prefix), "/"),
 		CredentialRef: strings.TrimSpace(in.CredentialRef),
 		UsePathStyle:  in.UsePathStyle,
+		UploadMode:    normalizeUploadMode(in.UploadMode),
 		Default:       in.Default,
 		CreatedAt:     existing.CreatedAt,
 		UpdatedAt:     s.clock.Now().UTC(),

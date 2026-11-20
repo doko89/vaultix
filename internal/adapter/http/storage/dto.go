@@ -19,7 +19,14 @@ type DestinationRequest struct {
 	Prefix        string `json:"prefix" validate:"omitempty,max=256"`
 	CredentialRef string `json:"credential_ref" validate:"omitempty,max=128"`
 	UsePathStyle  bool   `json:"use_path_style"`
-	Default       bool   `json:"default"`
+	// UploadMode is "presigned" (default, may be omitted) or "direct".
+	// WARNING: "direct" is the explicit per-destination opt-in exception to
+	// PRD §7.12 "never expose long-lived creds to agents": every polled job
+	// hands the destination's full S3 access-key pair to the agent. Use it
+	// only for S3 implementations with broken SigV4 query auth (presigned
+	// PUTs rejected with 403 while header auth works).
+	UploadMode string `json:"upload_mode" validate:"omitempty,oneof=presigned direct"`
+	Default    bool   `json:"default"`
 }
 
 func (r DestinationRequest) toCreateInput() ustorage.CreateDestinationInput {
@@ -31,6 +38,7 @@ func (r DestinationRequest) toCreateInput() ustorage.CreateDestinationInput {
 		Prefix:        r.Prefix,
 		CredentialRef: r.CredentialRef,
 		UsePathStyle:  r.UsePathStyle,
+		UploadMode:    domain.UploadMode(r.UploadMode),
 		Default:       r.Default,
 	}
 }
@@ -45,6 +53,7 @@ func (r DestinationRequest) toUpdateInput(id string) ustorage.UpdateDestinationI
 		Prefix:        r.Prefix,
 		CredentialRef: r.CredentialRef,
 		UsePathStyle:  r.UsePathStyle,
+		UploadMode:    domain.UploadMode(r.UploadMode),
 		Default:       r.Default,
 	}
 }
@@ -60,6 +69,7 @@ type DestinationResponse struct {
 	Prefix        string    `json:"prefix"`
 	CredentialRef string    `json:"credential_ref"`
 	UsePathStyle  bool      `json:"use_path_style"`
+	UploadMode    string    `json:"upload_mode"`
 	Default       bool      `json:"default"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
@@ -75,6 +85,7 @@ func toDestinationResponse(d *domain.StorageDestination) DestinationResponse {
 		Prefix:        d.Prefix,
 		CredentialRef: d.CredentialRef,
 		UsePathStyle:  d.UsePathStyle,
+		UploadMode:    string(d.NormalizedUploadMode()),
 		Default:       d.Default,
 		CreatedAt:     d.CreatedAt,
 		UpdatedAt:     d.UpdatedAt,
