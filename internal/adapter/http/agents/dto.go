@@ -325,6 +325,21 @@ type checkUpdatesResponse struct {
 	UpToDate  bool              `json:"up_to_date"`
 }
 
+type batchUpdateRequest struct {
+	AgentIDs []string `json:"agent_ids" validate:"required,min=1,max=200,dive,max=128"`
+}
+
+type batchUpdateItem struct {
+	AgentID       string `json:"agent_id"`
+	TargetVersion string `json:"target_version"`
+	Status        string `json:"status"`
+	Error         string `json:"error"`
+}
+
+type batchUpdateResponse struct {
+	Results []batchUpdateItem `json:"results"`
+}
+
 type updateReportRequest struct {
 	Status  string `json:"status" validate:"required,max=32"`
 	Version string `json:"version" validate:"required,max=64"`

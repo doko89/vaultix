@@ -106,6 +106,9 @@ func (matrixAgents) PendingDirective(_ context.Context, _ string) (*updateuc.Dir
 func (matrixAgents) DownloadArtifact(_ context.Context, _ string) (*domain.AgentArtifact, error) {
 	return nil, domain.ErrNotFound
 }
+func (matrixAgents) BatchRequestUpdate(_ context.Context, _ []string, _ string) ([]updateuc.BatchResult, error) {
+	return nil, nil
+}
 func (matrixAgents) ReportUpdate(_ context.Context, _, _, _, _ string) error { return nil }
 func (matrixAgents) Describe(_ context.Context, _ string) (*updateuc.Info, error) {
 	return &updateuc.Info{}, nil
@@ -238,6 +241,7 @@ func TestRBACMatrix(t *testing.T) {
 		{"POST", "/api/agents/ag-1/revoke", ""},
 		{"DELETE", "/api/agents/ag-1", ""},
 		{"POST", "/api/agents/ag-1/update", `{"artifact_id":"art-1"}`},
+		{"POST", "/api/agents/updates/batch", `{"agent_ids":["ag-1"]}`},
 		{"DELETE", "/api/agents/updates/artifacts/art-1", ""},
 	} {
 		rec := matrixDo(t, mux, w.method, w.target, w.body, "tok-op")
@@ -287,6 +291,7 @@ func TestUIRoleRulesTable(t *testing.T) {
 		"POST /api/agents/:id/revoke":                admin,
 		"DELETE /api/agents/:id":                     admin,
 		"POST /api/agents/updates/check":             admin,
+		"POST /api/agents/updates/batch":             admin,
 		"DELETE /api/agents/updates/artifacts/:id":   admin,
 		"POST /api/agents/:id/update":                admin,
 		"POST /api/restore/plan":                     op,

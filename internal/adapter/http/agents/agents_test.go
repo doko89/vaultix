@@ -285,6 +285,17 @@ func (f *fakeUpdates) DownloadArtifact(_ context.Context, agentID string) (*doma
 	}, nil
 }
 
+func (f *fakeUpdates) BatchRequestUpdate(_ context.Context, agentIDs []string, _ string) ([]updateuc.BatchResult, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([]updateuc.BatchResult, 0, len(agentIDs))
+	for _, id := range agentIDs {
+		out = append(out, updateuc.BatchResult{AgentID: id, TargetVersion: "v2.0.0", Status: updateuc.BatchRequested})
+	}
+	return out, nil
+}
+
 func (f *fakeUpdates) ReportUpdate(_ context.Context, agentID, status, _ string, errMsg string) error {
 	if f.err != nil {
 		return f.err
@@ -491,6 +502,7 @@ func TestMountRegistersRoutes(t *testing.T) {
 		{"GET", "/api/agents/:id/resources", nil},
 		{"GET", "/api/agents/updates/artifacts", nil},
 		{"POST", "/api/agents/updates/check", nil},
+		{"POST", "/api/agents/updates/batch", nil},
 		{"DELETE", "/api/agents/updates/artifacts/:id", nil},
 		{"GET", "/api/agents/:id/update", nil},
 		{"POST", "/api/agents/:id/update", nil},
@@ -908,6 +920,7 @@ func TestUpdateUnwired501(t *testing.T) {
 	cases := []struct{ method, pattern, target, body string }{
 		{"GET", "/api/agents/updates/artifacts", "/api/agents/updates/artifacts", ""},
 		{"POST", "/api/agents/updates/check", "/api/agents/updates/check", ""},
+		{"POST", "/api/agents/updates/batch", "/api/agents/updates/batch", `{"agent_ids":["ag-1"]}`},
 		{"DELETE", "/api/agents/updates/artifacts/:id", "/api/agents/updates/artifacts/art-1", ""},
 		{"GET", "/api/agents/:id/update", "/api/agents/ag-1/update", ""},
 		{"POST", "/api/agents/:id/update", "/api/agents/ag-1/update", `{"artifact_id":"art-1"}`},
@@ -937,6 +950,19 @@ func TestUpdateArtifactsUI(t *testing.T) {
 	decodeBody(t, rec, &checked)
 	if !checked.UpToDate {
 		t.Fatalf("check body: %+v", checked)
+	}
+	batch := r.find("POST", "/api/agents/updates/batch")
+	if rec := do(t, batch, "POST", "/api/agents/updates/batch", `{"agent_ids":[]}`, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty batch: want 400, got %d", rec.Code)
+	}
+	rec = do(t, batch, "POST", "/api/agents/updates/batch", `{"agent_ids":["ag-1","ag-2"]}`, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("batch: want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var out batchUpdateResponse
+	decodeBody(t, rec, &out)
+	if len(out.Results) != 2 || out.Results[0].Status != updateuc.BatchRequested {
+		t.Fatalf("batch body: %+v", out)
 	}
 	list := r.find("GET", "/api/agents/updates/artifacts")
 	rec = do(t, list, "GET", "/api/agents/updates/artifacts", "", "")

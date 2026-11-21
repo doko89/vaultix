@@ -102,6 +102,38 @@ func (h *handler) handleDeleteArtifact(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleBatchRequestUpdate targets a batch of agents at their latest
+// cached builds, reporting a per-agent outcome.
+// POST /api/agents/updates/batch {"agent_ids": [...]}
+func (h *handler) handleBatchRequestUpdate(w http.ResponseWriter, r *http.Request) {
+	if !requireUpdates(h) {
+		h.writeError(w, r, errNotConfigured)
+		return
+	}
+	var req batchUpdateRequest
+	if err := decodeJSON(r, &req); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	if err := h.check(req); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	results, err := h.updates.BatchRequestUpdate(r.Context(), req.AgentIDs, "")
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	out := make([]batchUpdateItem, 0, len(results))
+	for _, item := range results {
+		out = append(out, batchUpdateItem{
+			AgentID: item.AgentID, TargetVersion: item.TargetVersion,
+			Status: item.Status, Error: item.Error,
+		})
+	}
+	writeJSON(w, http.StatusOK, batchUpdateResponse{Results: out})
+}
+
 // handleRequestUpdate targets one agent at one explicit artifact.
 // POST /api/agents/:id/update {"artifact_id": ...}
 func (h *handler) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {

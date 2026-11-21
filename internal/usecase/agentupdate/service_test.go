@@ -511,6 +511,42 @@ func TestSyncReleases(t *testing.T) {
 	})
 }
 
+func TestBatchRequestUpdate(t *testing.T) {
+	svc, _, _ := testSetup()
+	ctx := context.Background()
+	if _, err := svc.BatchRequestUpdate(ctx, nil, ""); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("empty: want ErrValidation, got %v", err)
+	}
+	big := make([]string, 201)
+	for i := range big {
+		big[i] = "ag-old"
+	}
+	if _, err := svc.BatchRequestUpdate(ctx, big, ""); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("oversize: want ErrValidation, got %v", err)
+	}
+	mustUpload(t, svc, "v2.0.0", "linux", "amd64")
+	got, err := svc.BatchRequestUpdate(ctx, []string{"ag-old", "ag-new", "missing", "ag-old", "  "}, "")
+	if err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+	byID := map[string]BatchResult{}
+	for _, r := range got {
+		byID[r.AgentID] = r
+	}
+	if len(got) != 3 {
+		t.Fatalf("dedup/blank: %+v", got)
+	}
+	if byID["ag-old"].Status != BatchRequested || byID["ag-old"].TargetVersion != "v2.0.0" {
+		t.Fatalf("old: %+v", byID["ag-old"])
+	}
+	if byID["ag-new"].Status != BatchSkipped {
+		t.Fatalf("new: %+v", byID["ag-new"])
+	}
+	if byID["missing"].Status != BatchFailed || byID["missing"].Error == "" {
+		t.Fatalf("missing: %+v", byID["missing"])
+	}
+}
+
 func TestDescribe(t *testing.T) {
 	svc, _, _ := testSetup()
 	ctx := context.Background()

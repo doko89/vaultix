@@ -15,7 +15,8 @@ import { Pagination } from "@/shared/ui/pagination";
 import { Select } from "@/shared/ui/select";
 import { TableSkeleton } from "@/shared/ui/skeleton";
 import { useToasts } from "@/shared/ui/toast";
-import { useAgents, useArtifacts, useCheckUpdates, useDeleteArtifact, useIssueEnrollToken } from "../hooks";
+import { useAgents, useArtifacts, useBatchRequestUpdate, useCheckUpdates, useDeleteArtifact, useIssueEnrollToken } from "../hooks";
+import type { ID } from "@/shared/types";
 import type { Agent } from "../types";
 
 const PAGE_SIZE = 25;
@@ -203,6 +204,8 @@ export function AgentsPage() {
   const [status, setStatus] = useState("");
   const [offset, setOffset] = useState(0);
   const [enrollOpen, setEnrollOpen] = useState(false);
+  const [selected, setSelected] = useState<ID[]>([]);
+  const [confirmBatch, setConfirmBatch] = useState(false);
   const navigate = useNavigate();
   const q = useDebouncedValue(search.trim());
 
@@ -212,6 +215,24 @@ export function AgentsPage() {
     limit: PAGE_SIZE,
     offset,
   });
+  const batch = useBatchRequestUpdate(() => {
+    setSelected([]);
+    setConfirmBatch(false);
+  });
+
+  const pageIds = (agents.data?.items ?? []).map((a) => a.id);
+  const pageSelected = pageIds.filter((id) => selected.includes(id));
+  const allPageSelected = pageIds.length > 0 && pageSelected.length === pageIds.length;
+
+  function toggleOne(id: ID): void {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function togglePage(): void {
+    setSelected((prev) =>
+      allPageSelected ? prev.filter((id) => !pageIds.includes(id)) : [...prev, ...pageIds.filter((id) => !prev.includes(id))],
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -252,6 +273,11 @@ export function AgentsPage() {
           <option value="offline">Offline</option>
           <option value="revoked">Revoked</option>
         </Select>
+        {selected.length > 0 && (
+          <Button type="button" variant="outline" size="sm" onClick={() => setConfirmBatch(true)}>
+            Update selected ({selected.length})
+          </Button>
+        )}
       </div>
       <Card>
         <CardHeader>
@@ -269,6 +295,19 @@ export function AgentsPage() {
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-border text-xs text-gray-500">
+                    <th className="py-2 pr-4">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all agents on this page"
+                        checked={allPageSelected}
+                        ref={(el) => {
+                          if (el !== null) {
+                            el.indeterminate = !allPageSelected && pageSelected.length > 0;
+                          }
+                        }}
+                        onChange={togglePage}
+                      />
+                    </th>
                     <th className="py-2 pr-4 font-medium">Status</th>
                     <th className="py-2 pr-4 font-medium">Hostname</th>
                     <th className="py-2 pr-4 font-medium">IP</th>
@@ -285,6 +324,14 @@ export function AgentsPage() {
                       className="cursor-pointer border-b border-border hover:bg-surface"
                       onClick={() => navigate(`/agents/${encodeURIComponent(agent.id)}`)}
                     >
+                      <td className="py-2 pr-4" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${agent.hostname}`}
+                          checked={selected.includes(agent.id)}
+                          onChange={() => toggleOne(agent.id)}
+                        />
+                      </td>
                       <td className="py-2 pr-4">
                         <span className="flex items-center gap-1">
                           <StatusCell agent={agent} />
@@ -323,6 +370,18 @@ export function AgentsPage() {
       </Card>
 
       <ArtifactManager />
+
+      <ConfirmDialog
+        open={confirmBatch}
+        title={`Update ${selected.length} agent${selected.length === 1 ? "" : "s"}?`}
+        body="Each selected agent is targeted at its latest cached binary and restarts itself once idle. Agents already up to date are skipped."
+        confirmLabel="Update selected"
+        busy={batch.isPending}
+        onConfirm={() => {
+          batch.mutate(selected);
+        }}
+        onClose={() => setConfirmBatch(false)}
+      />
 
       <EnrollTokenDialog open={enrollOpen} onClose={() => setEnrollOpen(false)} />
     </div>

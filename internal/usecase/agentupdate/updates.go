@@ -240,6 +240,69 @@ func (s *Service) Describe(ctx context.Context, agentID string) (*Info, error) {
 	return info, nil
 }
 
+// BatchResult is one agent's batch-update outcome: requested (slot
+// targeted), skipped (already current or no build), or failed.
+type BatchResult struct {
+	AgentID       string
+	TargetVersion string
+	Status        string
+	Error         string
+}
+
+// Batch statuses.
+const (
+	BatchRequested = "requested"
+	BatchSkipped   = "skipped"
+	BatchFailed    = "failed"
+)
+
+// maxBatchSize caps one batch request.
+const maxBatchSize = 200
+
+// BatchRequestUpdate targets every listed agent at its latest cached
+// build. Per-agent failures never abort the batch: each agent reports
+// its own outcome.
+func (s *Service) BatchRequestUpdate(ctx context.Context, agentIDs []string, by string) ([]BatchResult, error) {
+	if len(agentIDs) == 0 {
+		return nil, fmt.Errorf("%w: at least one agent id is required", domain.ErrValidation)
+	}
+	if len(agentIDs) > maxBatchSize {
+		return nil, fmt.Errorf("%w: at most %d agents per batch", domain.ErrValidation, maxBatchSize)
+	}
+	seen := map[string]bool{}
+	out := make([]BatchResult, 0, len(agentIDs))
+	for _, id := range agentIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, s.batchOne(ctx, id, by))
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: at least one agent id is required", domain.ErrValidation)
+	}
+	return out, nil
+}
+
+func (s *Service) batchOne(ctx context.Context, agentID, by string) BatchResult {
+	info, err := s.Describe(ctx, agentID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return BatchResult{AgentID: agentID, Status: BatchFailed, Error: "agent not found"}
+		}
+		return BatchResult{AgentID: agentID, Status: BatchFailed, Error: err.Error()}
+	}
+	if !info.Available || info.Latest == nil {
+		return BatchResult{AgentID: agentID, Status: BatchSkipped, Error: "already up to date"}
+	}
+	slot, err := s.RequestUpdate(ctx, agentID, info.Latest.ID, by)
+	if err != nil {
+		return BatchResult{AgentID: agentID, Status: BatchFailed, Error: err.Error()}
+	}
+	return BatchResult{AgentID: agentID, TargetVersion: slot.TargetVersion, Status: BatchRequested}
+}
+
 // findArtifact locates one version+platform build, or (nil, nil).
 func (s *Service) findArtifact(ctx context.Context, version, goos, goarch string) (*domain.AgentArtifact, error) {
 	arts, err := s.updates.ListPlatformArtifacts(ctx, goos, goarch)

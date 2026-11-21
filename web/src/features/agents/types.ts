@@ -110,6 +110,17 @@ export interface UpdateCheckResult {
   up_to_date: boolean;
 }
 
+export interface BatchUpdateItem {
+  agent_id: ID;
+  target_version: string;
+  status: "requested" | "skipped" | "failed";
+  error: string;
+}
+
+export interface BatchUpdateResult {
+  results: BatchUpdateItem[];
+}
+
 /** DESIGN section 5 groups for the resources browser. */
 export type ResourceGroup = "host" | "container" | "volume" | "database" | "stack" | "other";
 

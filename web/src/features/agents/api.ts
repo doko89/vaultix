@@ -8,6 +8,7 @@ import type {
   AgentResources,
   AgentUpdateInfo,
   AgentUpdateSlot,
+  BatchUpdateResult,
   EnrollToken,
   UpdateCheckResult,
 } from "./types";
@@ -73,4 +74,8 @@ export function describeUpdate(agentId: ID): Promise<AgentUpdateInfo> {
 
 export function requestUpdate(agentId: ID, artifactId: ID): Promise<AgentUpdateSlot> {
   return api.post<AgentUpdateSlot>(`/agents/${encodeURIComponent(agentId)}/update`, { artifact_id: artifactId });
+}
+
+export function batchRequestUpdate(agentIds: ID[]): Promise<BatchUpdateResult> {
+  return api.post<BatchUpdateResult>("/agents/updates/batch", { agent_ids: agentIds });
 }

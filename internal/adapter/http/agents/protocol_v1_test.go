@@ -457,8 +457,8 @@ func TestMountSplit(t *testing.T) {
 			t.Fatalf("UI mount leaked protocol route %s %s", rt.method, rt.pattern)
 		}
 	}
-	if len(ui.routes) != 13 {
-		t.Fatalf("want 13 UI routes, got %d", len(ui.routes))
+	if len(ui.routes) != 14 {
+		t.Fatalf("want 14 UI routes, got %d", len(ui.routes))
 	}
 	for _, rt := range proto.routes {
 		if strings.HasPrefix(rt.pattern, "/api/agents/") || rt.pattern == "/api/agents" {

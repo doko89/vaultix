@@ -3,6 +3,7 @@ import type { ID } from "@/shared/types";
 import { errorText } from "@/shared/lib/api";
 import { useToasts } from "@/shared/ui/toast";
 import {
+  batchRequestUpdate,
   checkUpdates,
   deleteAgent,
   deleteArtifact,
@@ -173,5 +174,33 @@ export function useRequestUpdate() {
       void queryClient.invalidateQueries({ queryKey: [...AGENTS_KEY] });
     },
     onError: (err) => push({ tone: "error", title: "Could not request update", message: errorText(err) }),
+  });
+}
+
+export function useBatchRequestUpdate(onDone: () => void) {
+  const queryClient = useQueryClient();
+  const { push } = useToasts();
+  return useMutation({
+    mutationFn: (agentIds: ID[]) => batchRequestUpdate(agentIds),
+    onSuccess: (res) => {
+      const requested = res.results.filter((r) => r.status === "requested").length;
+      const skipped = res.results.filter((r) => r.status === "skipped").length;
+      const failed = res.results.filter((r) => r.status === "failed");
+      if (failed.length > 0) {
+        push({
+          tone: "error",
+          title: `Batch update: ${requested} requested, ${skipped} skipped, ${failed.length} failed`,
+          message: failed.map((r) => `${r.agent_id.slice(0, 8)}: ${r.error}`).join("; "),
+        });
+      } else {
+        push({
+          tone: "success",
+          title: `Batch update: ${requested} requested, ${skipped} skipped, 0 failed`,
+        });
+      }
+      void queryClient.invalidateQueries({ queryKey: [...AGENTS_KEY] });
+      onDone();
+    },
+    onError: (err) => push({ tone: "error", title: "Could not request batch update", message: errorText(err) }),
   });
 }

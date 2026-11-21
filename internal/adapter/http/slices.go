@@ -164,6 +164,7 @@ func uiRoleRules() []roleRule {
 		{"POST", "/api/agents/:id/revoke", admin},
 		{"DELETE", "/api/agents/:id", admin},
 		{"POST", "/api/agents/updates/check", admin},
+		{"POST", "/api/agents/updates/batch", admin},
 		{"DELETE", "/api/agents/updates/artifacts/:id", admin},
 		{"POST", "/api/agents/:id/update", admin},
 		// Restore.

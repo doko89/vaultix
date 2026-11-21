@@ -249,6 +249,7 @@ type UpdateService interface {
 	DeleteArtifact(ctx context.Context, id string) error
 	SyncReleases(ctx context.Context) (*updateuc.SyncStatus, error)
 	RequestUpdate(ctx context.Context, agentID, artifactID, by string) (*domain.AgentUpdate, error)
+	BatchRequestUpdate(ctx context.Context, agentIDs []string, by string) ([]updateuc.BatchResult, error)
 	PendingDirective(ctx context.Context, agentID string) (*updateuc.Directive, error)
 	DownloadArtifact(ctx context.Context, agentID string) (*domain.AgentArtifact, error)
 	ReportUpdate(ctx context.Context, agentID, status, version, errMsg string) error
