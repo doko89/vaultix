@@ -85,7 +85,7 @@ function ManualRunDialog({ open, onClose }: { open: boolean; onClose: () => void
   );
 }
 
-function JobDetail({ jobId, onClose }: { jobId: ID; onClose: () => void }) {
+function JobDetail({ jobId, onClose }: { jobId: ID | undefined; onClose: () => void }) {
   const detail = useJob(jobId);
   const retry = useRetryJob();
   const cancel = useCancelJob();
@@ -97,16 +97,8 @@ function JobDetail({ jobId, onClose }: { jobId: ID; onClose: () => void }) {
   const cancellable = job !== undefined && active;
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-4">
-          <CardTitle className="font-mono text-base">{jobId}</CardTitle>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-            Close
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
+    <Dialog open={jobId !== undefined} title="Job detail" description={jobId} wide onClose={onClose}>
+      <div>
         {job === undefined ? (
           <p className="text-sm text-gray-500">{detail.isLoading ? "Loading job…" : "Could not load this job."}</p>
         ) : (
@@ -216,7 +208,7 @@ function JobDetail({ jobId, onClose }: { jobId: ID; onClose: () => void }) {
             </div>
           </div>
         )}
-      </CardContent>
+      </div>
       <ConfirmDialog
         open={confirm === "retry"}
         title="Retry job?"
@@ -224,7 +216,7 @@ function JobDetail({ jobId, onClose }: { jobId: ID; onClose: () => void }) {
         confirmLabel="Retry job"
         busy={retry.isPending}
         onConfirm={() => {
-          retry.mutate(jobId, { onSuccess: () => setConfirm(null) });
+          if (jobId !== undefined) retry.mutate(jobId, { onSuccess: () => setConfirm(null) });
         }}
         onClose={() => setConfirm(null)}
       />
@@ -235,11 +227,11 @@ function JobDetail({ jobId, onClose }: { jobId: ID; onClose: () => void }) {
         confirmLabel="Cancel job"
         busy={cancel.isPending}
         onConfirm={() => {
-          cancel.mutate(jobId, { onSuccess: () => setConfirm(null) });
+          if (jobId !== undefined) cancel.mutate(jobId, { onSuccess: () => setConfirm(null) });
         }}
         onClose={() => setConfirm(null)}
       />
-    </Card>
+    </Dialog>
   );
 }
 
@@ -388,7 +380,7 @@ export function JobsPage() {
         </CardContent>
       </Card>
 
-      {selected !== undefined && <JobDetail jobId={selected} onClose={() => setSelected(undefined)} />}
+      <JobDetail jobId={selected} onClose={() => setSelected(undefined)} />
 
       <ManualRunDialog open={manualOpen} onClose={() => setManualOpen(false)} />
     </div>
