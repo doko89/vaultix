@@ -20,6 +20,10 @@ type Runner struct {
 	Uploader *Uploader
 	Restorer *Restorer
 	Logger   *slog.Logger
+	// Version is the running binary version for the self-update guard.
+	// Updater applies poll-advertised updates; nil disables self-update.
+	Version string
+	Updater *Updater
 
 	mu         sync.Mutex
 	runningJob string
@@ -27,6 +31,13 @@ type Runner struct {
 	runningR   string
 	cancelR    context.CancelFunc
 	workMu     sync.Mutex // serializes backup vs restore execution
+}
+
+// idleForUpdate reports no in-flight backup or restore.
+func (r *Runner) idleForUpdate() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.runningJob == "" && r.runningR == ""
 }
 
 func (r *Runner) logger() *slog.Logger {
@@ -108,6 +119,11 @@ func (r *Runner) RunBackupLoop(ctx context.Context) error {
 			continue
 		}
 		r.applyCancellations(ctx, resp.CancelledJobIDs)
+		if resp.Update != nil && r.Updater != nil {
+			if err := r.Updater.Apply(ctx, resp.Update, r.idleForUpdate); err != nil {
+				log.Warn("agent update failed", "target", resp.Update.Version, "error", err)
+			}
+		}
 		for _, job := range resp.Jobs {
 			if ctx.Err() != nil {
 				return nil

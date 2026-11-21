@@ -1,11 +1,13 @@
 package agents
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/vaultix/vaultix/internal/domain"
 	agentuc "github.com/vaultix/vaultix/internal/usecase/agent"
+	updateuc "github.com/vaultix/vaultix/internal/usecase/agentupdate"
 	discoveryuc "github.com/vaultix/vaultix/internal/usecase/discovery"
 )
 
@@ -200,6 +203,126 @@ func (f *fakeAgents) AgentPolicies(_ context.Context, agentID string) ([]agentuc
 	return f.policies[agentID], nil
 }
 
+type fakeUpdates struct {
+	artifacts map[string]*domain.AgentArtifact
+	slots     map[string]*domain.AgentUpdate
+	err       error
+}
+
+func newFakeUpdates() *fakeUpdates {
+	return &fakeUpdates{artifacts: map[string]*domain.AgentArtifact{}, slots: map[string]*domain.AgentUpdate{}}
+}
+
+func (f *fakeUpdates) UploadArtifact(_ context.Context, version, goos, goarch string, data []byte, _ string) (*domain.AgentArtifact, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	a := &domain.AgentArtifact{
+		ID: "art-1", Version: version, GOOS: goos, GOARCH: goarch,
+		SHA256: []byte{1, 2, 3}, SizeBytes: int64(len(data)),
+	}
+	f.artifacts[a.ID] = a
+	cp := *a
+	return &cp, nil
+}
+
+func (f *fakeUpdates) ListArtifacts(_ context.Context) ([]domain.AgentArtifact, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	var out []domain.AgentArtifact
+	for _, a := range f.artifacts {
+		out = append(out, *a)
+	}
+	return out, nil
+}
+
+func (f *fakeUpdates) DeleteArtifact(_ context.Context, id string) error {
+	if f.err != nil {
+		return f.err
+	}
+	if _, ok := f.artifacts[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(f.artifacts, id)
+	return nil
+}
+
+func (f *fakeUpdates) RequestUpdate(_ context.Context, agentID, artifactID, _ string) (*domain.AgentUpdate, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	a, ok := f.artifacts[artifactID]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	u := &domain.AgentUpdate{
+		AgentID: agentID, TargetVersion: a.Version, GOOS: a.GOOS, GOARCH: a.GOARCH,
+		Status: domain.AgentUpdatePending,
+	}
+	f.slots[agentID] = u
+	cp := *u
+	return &cp, nil
+}
+
+func (f *fakeUpdates) PendingDirective(_ context.Context, agentID string) (*updateuc.Directive, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	u, ok := f.slots[agentID]
+	if !ok || u.Status != domain.AgentUpdatePending {
+		return nil, nil
+	}
+	return &updateuc.Directive{
+		Version: u.TargetVersion, GOOS: u.GOOS, GOARCH: u.GOARCH,
+		SHA256: []byte{1, 2, 3}, SizeBytes: 3,
+	}, nil
+}
+
+func (f *fakeUpdates) DownloadArtifact(_ context.Context, agentID string) (*domain.AgentArtifact, error) {
+	dir, err := f.PendingDirective(context.Background(), agentID)
+	if err != nil {
+		return nil, err
+	}
+	if dir == nil {
+		return nil, domain.ErrNotFound
+	}
+	return &domain.AgentArtifact{
+		Version: dir.Version, GOOS: dir.GOOS, GOARCH: dir.GOARCH,
+		SHA256: dir.SHA256, Bytes: []byte("fake-bytes"),
+	}, nil
+}
+
+func (f *fakeUpdates) ReportUpdate(_ context.Context, agentID, status, _ string, errMsg string) error {
+	if f.err != nil {
+		return f.err
+	}
+	u, ok := f.slots[agentID]
+	if !ok {
+		return nil
+	}
+	u.Status = status
+	u.Error = errMsg
+	return nil
+}
+
+func (f *fakeUpdates) Describe(_ context.Context, agentID string) (*updateuc.Info, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	info := &updateuc.Info{}
+	for _, a := range f.artifacts {
+		cp := *a
+		info.Latest = &cp
+		info.Available = true
+	}
+	if u, ok := f.slots[agentID]; ok {
+		cp := *u
+		info.Pending = &cp
+	}
+	return info, nil
+}
+
 func (f *fakeAgents) AuthenticateAgent(_ context.Context, bearer string) (*domain.AgentCredential, error) {
 	f.authTokens = append(f.authTokens, bearer)
 	switch bearer {
@@ -322,6 +445,25 @@ func testRouter() (*stubRouter, *fakeAgents, *fakeDiscovery, *fakeJobs) {
 	return r, agents, disco, jobs
 }
 
+func testRouterWithUpdates() (*stubRouter, *fakeAgents, *fakeUpdates) {
+	agents := newFakeAgents()
+	agents.agents["ag-1"] = agentuc.AgentView{
+		Agent:  domain.Agent{ID: "ag-1", Hostname: "vm-01", Version: "1.2.0", EnrolledAt: time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)},
+		Status: domain.AgentStatusOnline,
+	}
+	updates := newFakeUpdates()
+	r := &stubRouter{}
+	Mount(r, Deps{
+		Agents:    agents,
+		Discovery: &fakeDiscovery{items: map[string][]domain.DiscoveredResource{}},
+		Jobs:      &fakeJobs{},
+		Updates:   updates,
+		Now:       func() time.Time { return time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC) },
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	return r, agents, updates
+}
+
 func do(t *testing.T, h http.HandlerFunc, method, target, body, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader io.Reader
@@ -355,6 +497,11 @@ func TestMountRegistersRoutes(t *testing.T) {
 		{"DELETE", "/api/agents/:id", nil},
 		{"GET", "/api/agents/:id/policies", nil},
 		{"GET", "/api/agents/:id/resources", nil},
+		{"GET", "/api/agents/updates/artifacts", nil},
+		{"POST", "/api/agents/updates/artifacts", nil},
+		{"DELETE", "/api/agents/updates/artifacts/:id", nil},
+		{"GET", "/api/agents/:id/update", nil},
+		{"POST", "/api/agents/:id/update", nil},
 		{"POST", "/api/agent/enroll", nil},
 		{"POST", "/api/agent/heartbeat", nil},
 		{"GET", "/api/agent/poll", nil},
@@ -366,6 +513,8 @@ func TestMountRegistersRoutes(t *testing.T) {
 		{"POST", "/api/agent/restores/poll", nil},
 		{"POST", "/api/agent/restores/:id/download-grants", nil},
 		{"POST", "/api/agent/restores/:id/report", nil},
+		{"GET", "/api/agent/update/download", nil},
+		{"POST", "/api/agent/update/report", nil},
 	}
 	if len(r.routes) != len(want) {
 		t.Fatalf("want %d routes, got %d", len(want), len(r.routes))
@@ -759,5 +908,184 @@ func TestInternalErrorMapping(t *testing.T) {
 	decodeBody(t, rec, &body)
 	if body.Error.Code != "internal_error" || body.Error.Message != "internal error" {
 		t.Fatalf("500 must be generic: %+v", body)
+	}
+}
+
+func doMultipart(t *testing.T, h http.HandlerFunc, target string, fields map[string]string, fileField, fileName string, fileBytes []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, v := range fields {
+		if err := w.WriteField(k, v); err != nil {
+			t.Fatalf("write field: %v", err)
+		}
+	}
+	if fileField != "" {
+		fw, err := w.CreateFormFile(fileField, fileName)
+		if err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+		if _, err := fw.Write(fileBytes); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, target, &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	return rec
+}
+
+func TestUpdateUnwired501(t *testing.T) {
+	r, _, _, _ := testRouter() // no Updates wired
+	cases := []struct{ method, pattern, target, body string }{
+		{"GET", "/api/agents/updates/artifacts", "/api/agents/updates/artifacts", ""},
+		{"DELETE", "/api/agents/updates/artifacts/:id", "/api/agents/updates/artifacts/art-1", ""},
+		{"GET", "/api/agents/:id/update", "/api/agents/ag-1/update", ""},
+		{"POST", "/api/agents/:id/update", "/api/agents/ag-1/update", `{"artifact_id":"art-1"}`},
+		{"GET", "/api/agent/update/download", "/api/agent/update/download", ""},
+		{"POST", "/api/agent/update/report", "/api/agent/update/report", `{"status":"applied","version":"v2"}`},
+	}
+	for _, c := range cases {
+		rec := do(t, r.find(c.method, c.pattern), c.method, c.target, c.body, "agent-token")
+		if rec.Code != http.StatusNotImplemented {
+			t.Fatalf("%s %s unwired: want 501, got %d", c.method, c.pattern, rec.Code)
+		}
+	}
+	up := r.find("POST", "/api/agents/updates/artifacts")
+	rec := doMultipart(t, up, "/api/agents/updates/artifacts",
+		map[string]string{"version": "v2", "goos": "linux", "goarch": "amd64"}, "binary", "agent", []byte("x"))
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("upload unwired: want 501, got %d", rec.Code)
+	}
+}
+
+func TestUpdateArtifactsUI(t *testing.T) {
+	r, _, _ := testRouterWithUpdates()
+	upload := r.find("POST", "/api/agents/updates/artifacts")
+	rec := doMultipart(t, upload, "/api/agents/updates/artifacts",
+		map[string]string{"version": "v2.0.0", "goos": "linux", "goarch": "amd64"}, "binary", "agent", []byte("fake-bytes"))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload: want 201, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var created artifactSummary
+	decodeBody(t, rec, &created)
+	if created.Version != "v2.0.0" || created.SHA256 == "" || created.SizeBytes != 10 {
+		t.Fatalf("upload body: %+v", created)
+	}
+	rec = doMultipart(t, upload, "/api/agents/updates/artifacts",
+		map[string]string{"version": "v2.0.0", "goos": "linux", "goarch": "amd64"}, "", "", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing binary: want 400, got %d", rec.Code)
+	}
+	list := r.find("GET", "/api/agents/updates/artifacts")
+	rec = do(t, list, "GET", "/api/agents/updates/artifacts", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: want 200, got %d", rec.Code)
+	}
+	var listed listArtifactsResponse
+	decodeBody(t, rec, &listed)
+	if len(listed.Items) != 1 || listed.Items[0].Version != "v2.0.0" {
+		t.Fatalf("list body: %+v", listed)
+	}
+	del := r.find("DELETE", "/api/agents/updates/artifacts/:id")
+	if rec := do(t, del, "DELETE", "/api/agents/updates/artifacts/missing", "", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("delete missing: want 404, got %d", rec.Code)
+	}
+	if rec := do(t, del, "DELETE", "/api/agents/updates/artifacts/art-1", "", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: want 204, got %d", rec.Code)
+	}
+}
+
+func TestUpdateRequestDescribe(t *testing.T) {
+	r, _, updates := testRouterWithUpdates()
+	updates.artifacts["art-1"] = &domain.AgentArtifact{
+		ID: "art-1", Version: "v2.0.0", GOOS: "linux", GOARCH: "amd64",
+		SHA256: []byte{1, 2, 3}, SizeBytes: 10,
+	}
+	req := r.find("POST", "/api/agents/:id/update")
+	if rec := do(t, req, "POST", "/api/agents/ag-1/update", `{}`, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing artifact_id: want 400, got %d", rec.Code)
+	}
+	if rec := do(t, req, "POST", "/api/agents/ag-1/update", `{"artifact_id":"missing"}`, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown artifact: want 404, got %d", rec.Code)
+	}
+	rec := do(t, req, "POST", "/api/agents/ag-1/update", `{"artifact_id":"art-1"}`, "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("request: want 202, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var slot updateSlotDTO
+	decodeBody(t, rec, &slot)
+	if slot.TargetVersion != "v2.0.0" || slot.Status != domain.AgentUpdatePending {
+		t.Fatalf("request body: %+v", slot)
+	}
+	desc := r.find("GET", "/api/agents/:id/update")
+	rec = do(t, desc, "GET", "/api/agents/ag-1/update", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("describe: want 200, got %d", rec.Code)
+	}
+	var info describeUpdateResponse
+	decodeBody(t, rec, &info)
+	if !info.Available || info.Latest == nil || info.Latest.Version != "v2.0.0" {
+		t.Fatalf("describe latest: %+v", info)
+	}
+	if info.Pending == nil || info.Pending.TargetVersion != "v2.0.0" {
+		t.Fatalf("describe pending: %+v", info)
+	}
+}
+
+func TestUpdateProtocol(t *testing.T) {
+	r, _, updates := testRouterWithUpdates()
+	updates.artifacts["art-1"] = &domain.AgentArtifact{
+		ID: "art-1", Version: "v2.0.0", GOOS: "linux", GOARCH: "amd64",
+		SHA256: []byte{1, 2, 3}, SizeBytes: 10,
+	}
+	dl := r.find("GET", "/api/agent/update/download")
+	if rec := do(t, dl, "GET", "/api/agent/update/download", "", "agent-token"); rec.Code != http.StatusNotFound {
+		t.Fatalf("download without pending: want 404, got %d", rec.Code)
+	}
+	updates.slots["ag-1"] = &domain.AgentUpdate{
+		AgentID: "ag-1", TargetVersion: "v2.0.0", GOOS: "linux", GOARCH: "amd64",
+		Status: domain.AgentUpdatePending,
+	}
+	rec := do(t, dl, "GET", "/api/agent/update/download", "", "agent-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("download: want 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != "fake-bytes" {
+		t.Fatalf("download body: %q", rec.Body.String())
+	}
+	if rec.Header().Get("X-Vaultix-Version") != "v2.0.0" || rec.Header().Get("X-Vaultix-SHA256") == "" {
+		t.Fatalf("download headers: %v", rec.Header())
+	}
+	rep := r.find("POST", "/api/agent/update/report")
+	rec = do(t, rep, "POST", "/api/agent/update/report", `{"status":"applied","version":"v2.0.0"}`, "agent-token")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("report: want 204, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if updates.slots["ag-1"].Status != domain.AgentUpdateApplied {
+		t.Fatalf("slot after report: %+v", updates.slots["ag-1"])
+	}
+}
+
+func TestPollCarriesDirective(t *testing.T) {
+	r, _, updates := testRouterWithUpdates()
+	updates.artifacts["art-1"] = &domain.AgentArtifact{ID: "art-1", Version: "v2.0.0"}
+	updates.slots["ag-1"] = &domain.AgentUpdate{
+		AgentID: "ag-1", TargetVersion: "v2.0.0", GOOS: "linux", GOARCH: "amd64",
+		Status: domain.AgentUpdatePending,
+	}
+	poll := r.find("GET", "/api/agent/poll")
+	rec := do(t, poll, "GET", "/api/agent/poll?limit=5", "", "agent-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("poll: want 200, got %d", rec.Code)
+	}
+	var out pollResponse
+	decodeBody(t, rec, &out)
+	if out.Update == nil || out.Update.Version != "v2.0.0" || out.Update.SHA256 == "" {
+		t.Fatalf("poll directive: %+v", out.Update)
 	}
 }

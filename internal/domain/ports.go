@@ -79,6 +79,20 @@ type AgentRepository interface {
 	LatestHeartbeat(ctx context.Context, agentID string) (*AgentHeartbeat, error)
 }
 
+// AgentUpdateRepository persists manager-hosted agent binaries and the
+// per-agent pending-update slot.
+type AgentUpdateRepository interface {
+	CreateArtifact(ctx context.Context, a *AgentArtifact) error
+	ListArtifacts(ctx context.Context) ([]AgentArtifact, error)
+	ListPlatformArtifacts(ctx context.Context, goos, goarch string) ([]AgentArtifact, error)
+	GetArtifact(ctx context.Context, id string) (*AgentArtifact, error)
+	DeleteArtifact(ctx context.Context, id string) error
+
+	UpsertUpdate(ctx context.Context, agentID, targetVersion, goos, goarch, requestedBy string) (*AgentUpdate, error)
+	GetUpdate(ctx context.Context, agentID string) (*AgentUpdate, error)
+	SetUpdateStatus(ctx context.Context, agentID, status, errMsg string) error
+}
+
 // DiscoveryRepository persists discovered resources.
 type DiscoveryRepository interface {
 	// ReplaceAgentResources swaps the agent's inventory snapshot.

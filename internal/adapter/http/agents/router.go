@@ -21,14 +21,16 @@ type Router interface {
 }
 
 // Deps wires the package. Agents, Discovery, and Jobs are required; Now,
-// Validate, and Logger default when nil. Grants and Restores are optional:
-// grant/restore handlers answer an explicit 501 until they are wired.
+// Validate, and Logger default when nil. Grants, Restores, and Updates are
+// optional: grant/restore/update handlers answer an explicit 501 until
+// they are wired (an unwired Updates additionally omits the poll directive).
 type Deps struct {
 	Agents    AgentService
 	Discovery DiscoveryService
 	Jobs      JobQueue
 	Grants    GrantService
 	Restores  RestoreAgentService
+	Updates   UpdateService
 
 	Now      func() time.Time
 	Validate *validator.Validate
@@ -41,6 +43,7 @@ type handler struct {
 	jobs      JobQueue
 	grants    GrantService
 	restores  RestoreAgentService
+	updates   UpdateService
 	now       func() time.Time
 	validate  *validator.Validate
 	log       *slog.Logger
@@ -62,6 +65,7 @@ func newHandler(deps Deps) *handler {
 		jobs:      deps.Jobs,
 		grants:    deps.Grants,
 		restores:  deps.Restores,
+		updates:   deps.Updates,
 		now:       deps.Now,
 		validate:  deps.Validate,
 		log:       deps.Logger,
@@ -100,6 +104,11 @@ func MountUI(r Router, deps Deps) {
 	r.Delete("/api/agents/:id", h.handleDeleteAgent)
 	r.Get("/api/agents/:id/policies", h.handleAgentPolicies)
 	r.Get("/api/agents/:id/resources", h.handleAgentResources)
+	r.Get("/api/agents/updates/artifacts", h.handleListArtifacts)
+	r.Post("/api/agents/updates/artifacts", h.handleUploadArtifact)
+	r.Delete("/api/agents/updates/artifacts/:id", h.handleDeleteArtifact)
+	r.Get("/api/agents/:id/update", h.handleDescribeUpdate)
+	r.Post("/api/agents/:id/update", h.handleRequestUpdate)
 }
 
 // MountProtocol registers the agent protocol (/api/agent/...). Enroll
@@ -118,4 +127,6 @@ func MountProtocol(r Router, deps Deps) {
 	r.Post("/api/agent/restores/poll", h.withAgentAuth(h.handleRestorePoll))
 	r.Post("/api/agent/restores/:id/download-grants", h.withAgentAuth(h.handleRestoreDownloadGrants))
 	r.Post("/api/agent/restores/:id/report", h.withAgentAuth(h.handleRestoreReport))
+	r.Get("/api/agent/update/download", h.withAgentAuth(h.handleDownloadUpdate))
+	r.Post("/api/agent/update/report", h.withAgentAuth(h.handleReportUpdate))
 }

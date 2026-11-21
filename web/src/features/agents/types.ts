@@ -72,6 +72,38 @@ export interface AgentResources {
   items: DiscoveredResource[];
 }
 
+export interface AgentArtifact {
+  id: ID;
+  version: string;
+  goos: string;
+  goarch: string;
+  sha256: string;
+  size_bytes: number;
+  uploaded_by: string;
+  created_at: string;
+}
+
+export interface AgentArtifactList {
+  items: AgentArtifact[];
+}
+
+export interface AgentUpdateSlot {
+  target_version: string;
+  goos: string;
+  goarch: string;
+  status: "pending" | "applied" | "failed";
+  error: string;
+  requested_by: string;
+  requested_at: string;
+  updated_at: string;
+}
+
+export interface AgentUpdateInfo {
+  latest: AgentArtifact | null;
+  available: boolean;
+  pending: AgentUpdateSlot | null;
+}
+
 /** DESIGN section 5 groups for the resources browser. */
 export type ResourceGroup = "host" | "container" | "volume" | "database" | "stack" | "other";
 

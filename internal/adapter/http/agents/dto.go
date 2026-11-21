@@ -110,9 +110,10 @@ type heartbeatResponse struct {
 }
 
 type pollResponse struct {
-	Jobs            []QueuedJob `json:"jobs"`
-	CancelledJobIDs []string    `json:"cancelled_job_ids"`
-	ServerTime      time.Time   `json:"server_time"`
+	Jobs            []QueuedJob      `json:"jobs"`
+	CancelledJobIDs []string         `json:"cancelled_job_ids"`
+	Update          *updateDirective `json:"update,omitempty"`
+	ServerTime      time.Time        `json:"server_time"`
 }
 
 type reportManifestObjectDTO struct {
@@ -267,4 +268,59 @@ type restoreReportRequest struct {
 
 type restoreReportResponse struct {
 	OK bool `json:"ok"`
+}
+
+// --- Update DTOs ---
+
+// updateDirective is the poll-advertised update order (omitted when none
+// is due). The agent downloads the bytes from update/download and must
+// verify sha256 before swapping.
+type updateDirective struct {
+	Version   string `json:"version"`
+	GOOS      string `json:"goos"`
+	GOARCH    string `json:"goarch"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+type artifactSummary struct {
+	ID         string `json:"id"`
+	Version    string `json:"version"`
+	GOOS       string `json:"goos"`
+	GOARCH     string `json:"goarch"`
+	SHA256     string `json:"sha256"`
+	SizeBytes  int64  `json:"size_bytes"`
+	UploadedBy string `json:"uploaded_by"`
+	CreatedAt  string `json:"created_at"`
+}
+
+type listArtifactsResponse struct {
+	Items []artifactSummary `json:"items"`
+}
+
+type updateSlotDTO struct {
+	TargetVersion string `json:"target_version"`
+	GOOS          string `json:"goos"`
+	GOARCH        string `json:"goarch"`
+	Status        string `json:"status"`
+	Error         string `json:"error"`
+	RequestedBy   string `json:"requested_by"`
+	RequestedAt   string `json:"requested_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type describeUpdateResponse struct {
+	Latest    *artifactSummary `json:"latest"`
+	Available bool             `json:"available"`
+	Pending   *updateSlotDTO   `json:"pending"`
+}
+
+type requestUpdateRequest struct {
+	ArtifactID string `json:"artifact_id" validate:"required,max=128"`
+}
+
+type updateReportRequest struct {
+	Status  string `json:"status" validate:"required,max=32"`
+	Version string `json:"version" validate:"required,max=64"`
+	Error   string `json:"error" validate:"max=4096"`
 }

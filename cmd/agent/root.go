@@ -174,6 +174,8 @@ func newRunCommand(configPath *string) *cobra.Command {
 				Uploader: &agent.Uploader{Manager: mgr},
 				Restorer: &agent.Restorer{Manager: mgr, WorkDir: cfg.WorkDir},
 				Logger:   log,
+				Version:  version,
+				Updater:  &agent.Updater{Client: mgr, Version: version, Logger: log},
 			}
 			if err := work.Validate(); err != nil {
 				return err

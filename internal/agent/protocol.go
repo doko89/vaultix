@@ -147,9 +147,20 @@ func (j PolledJob) EncryptionEnabled() bool { return j.Encryption.Enabled }
 
 // PollResponse is GET /api/agent/poll?limit=.
 type PollResponse struct {
-	Jobs            []PolledJob `json:"jobs"`
-	CancelledJobIDs []string    `json:"cancelled_job_ids"`
-	ServerTime      string      `json:"server_time,omitempty"`
+	Jobs            []PolledJob      `json:"jobs"`
+	CancelledJobIDs []string         `json:"cancelled_job_ids"`
+	Update          *UpdateDirective `json:"update,omitempty"`
+	ServerTime      string           `json:"server_time,omitempty"`
+}
+
+// UpdateDirective orders a self-update: download the bytes from
+// update/download, verify SHA256 hex + size, swap, restart, report.
+type UpdateDirective struct {
+	Version   string `json:"version"`
+	GOOS      string `json:"goos"`
+	GOARCH    string `json:"goarch"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
 }
 
 // UnmarshalJSON tolerates the pre-P3 shape (no cancelled_job_ids, string

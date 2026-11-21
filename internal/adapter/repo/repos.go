@@ -32,6 +32,7 @@ type Repos struct {
 	Stacks        *StackRepo
 	Notifications *NotificationRepo
 	Audit         *AuditRepo
+	Updates       *UpdateRepo
 }
 
 // New builds the repository bundle on the shared pool. The pool must be
@@ -54,6 +55,7 @@ func New(pool *pgxpool.Pool) *Repos {
 		Stacks:        &StackRepo{baseRepo: base},
 		Notifications: &NotificationRepo{baseRepo: base},
 		Audit:         &AuditRepo{baseRepo: base},
+		Updates:       &UpdateRepo{baseRepo: base},
 	}
 }
 
@@ -73,6 +75,7 @@ var (
 	_ domain.StackRepository        = (*StackRepo)(nil)
 	_ domain.NotificationRepository = (*NotificationRepo)(nil)
 	_ domain.AuditRepository        = (*AuditRepo)(nil)
+	_ domain.AgentUpdateRepository  = (*UpdateRepo)(nil)
 )
 
 // baseRepo shares the pool (for transactions) and the pool-bound queries.

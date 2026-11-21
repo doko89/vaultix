@@ -152,6 +152,9 @@ if ! id vaultix >/dev/null 2>&1; then
 fi
 mkdir -p /etc/vaultix /var/lib/vaultix/work
 chown vaultix:vaultix /var/lib/vaultix /var/lib/vaultix/work
+# Self-update support: the agent service user must own its binary to swap
+# it on manager orders (the systemd unit also allowlists this path).
+chown vaultix:vaultix /usr/local/bin/vaultix-agent
 
 # --- redeem the enroll token ---------------------------------------------------
 # POST /api/agent/enroll {"token","hostname","os","architecture"} -> 201 {"agent_id","token",...}.
@@ -223,12 +226,14 @@ LogsDirectory=vaultix
 StateDirectory=vaultix
 StateDirectoryMode=0750
 # Hardening: agent reads backup sources (read-only mounts stay readable) and
-# shells out to db tools; confine writes to its state/log dirs.
+# shells out to db tools; confine writes to its state/log dirs plus its own
+# binary (manager-ordered self-update swaps this file; the installer chowns
+# it to vaultix:vaultix for the same reason).
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/vaultix /var/log/vaultix
+ReadWritePaths=/var/lib/vaultix /var/log/vaultix /usr/local/bin/vaultix-agent
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

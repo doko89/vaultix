@@ -6,6 +6,7 @@ import (
 
 	"github.com/vaultix/vaultix/internal/domain"
 	agentuc "github.com/vaultix/vaultix/internal/usecase/agent"
+	updateuc "github.com/vaultix/vaultix/internal/usecase/agentupdate"
 	discoveryuc "github.com/vaultix/vaultix/internal/usecase/discovery"
 )
 
@@ -240,8 +241,23 @@ type DiscoveryService interface {
 	List(ctx context.Context, agentID string, kind domain.ResourceKind) ([]domain.DiscoveredResource, error)
 }
 
+// UpdateService mirrors the agent-update usecase surface this package
+// needs. It is optional like Grants/Restores: nil answers 501 on the
+// update endpoints and omits the poll directive.
+type UpdateService interface {
+	UploadArtifact(ctx context.Context, version, goos, goarch string, data []byte, by string) (*domain.AgentArtifact, error)
+	ListArtifacts(ctx context.Context) ([]domain.AgentArtifact, error)
+	DeleteArtifact(ctx context.Context, id string) error
+	RequestUpdate(ctx context.Context, agentID, artifactID, by string) (*domain.AgentUpdate, error)
+	PendingDirective(ctx context.Context, agentID string) (*updateuc.Directive, error)
+	DownloadArtifact(ctx context.Context, agentID string) (*domain.AgentArtifact, error)
+	ReportUpdate(ctx context.Context, agentID, status, version, errMsg string) error
+	Describe(ctx context.Context, agentID string) (*updateuc.Info, error)
+}
+
 // Compile-time proof that the real usecase services satisfy the seams.
 var (
 	_ AgentService     = (*agentuc.Service)(nil)
 	_ DiscoveryService = (*discoveryuc.Service)(nil)
+	_ UpdateService    = (*updateuc.Service)(nil)
 )

@@ -26,12 +26,14 @@ LogsDirectory=vaultix
 StateDirectory=vaultix
 StateDirectoryMode=0750
 # Hardening: agent reads backup sources (read-only mounts stay readable) and
-# shells out to db tools; confine writes to its state/log dirs.
+# shells out to db tools; confine writes to its state/log dirs plus its own
+# binary (manager-ordered self-update swaps this file; worker.sh chowns it
+# to vaultix:vaultix for the same reason).
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/vaultix /var/log/vaultix
+ReadWritePaths=/var/lib/vaultix /var/log/vaultix /usr/local/bin/vaultix-agent
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

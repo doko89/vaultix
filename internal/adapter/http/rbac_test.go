@@ -18,6 +18,7 @@ import (
 	platformhttp "github.com/vaultix/vaultix/internal/adapter/http/platform"
 	"github.com/vaultix/vaultix/internal/domain"
 	agentuc "github.com/vaultix/vaultix/internal/usecase/agent"
+	updateuc "github.com/vaultix/vaultix/internal/usecase/agentupdate"
 	authsvc "github.com/vaultix/vaultix/internal/usecase/auth"
 	discoveryuc "github.com/vaultix/vaultix/internal/usecase/discovery"
 	jobuc "github.com/vaultix/vaultix/internal/usecase/job"
@@ -89,6 +90,26 @@ func (matrixAgents) ListAgents(_ context.Context, _ domain.ListOptions, _ agentu
 func (matrixAgents) RevokeAgent(_ context.Context, _ string) error         { return nil }
 func (matrixAgents) SetDisabled(_ context.Context, _ string, _ bool) error { return nil }
 func (matrixAgents) DeleteAgent(_ context.Context, _ string) error         { return nil }
+func (matrixAgents) UploadArtifact(_ context.Context, _, _, _ string, _ []byte, _ string) (*domain.AgentArtifact, error) {
+	return &domain.AgentArtifact{ID: "art-1"}, nil
+}
+func (matrixAgents) ListArtifacts(_ context.Context) ([]domain.AgentArtifact, error) {
+	return nil, nil
+}
+func (matrixAgents) DeleteArtifact(_ context.Context, _ string) error { return nil }
+func (matrixAgents) RequestUpdate(_ context.Context, _, _, _ string) (*domain.AgentUpdate, error) {
+	return &domain.AgentUpdate{Status: domain.AgentUpdatePending}, nil
+}
+func (matrixAgents) PendingDirective(_ context.Context, _ string) (*updateuc.Directive, error) {
+	return nil, nil
+}
+func (matrixAgents) DownloadArtifact(_ context.Context, _ string) (*domain.AgentArtifact, error) {
+	return nil, domain.ErrNotFound
+}
+func (matrixAgents) ReportUpdate(_ context.Context, _, _, _, _ string) error { return nil }
+func (matrixAgents) Describe(_ context.Context, _ string) (*updateuc.Info, error) {
+	return &updateuc.Info{}, nil
+}
 func (matrixAgents) AgentPolicies(_ context.Context, _ string) ([]agentuc.PolicySummary, error) {
 	return nil, nil
 }
@@ -146,7 +167,7 @@ func matrixRouter() *Mux {
 				"tok-op":    sessionWithRoles(domain.RoleOperator),
 				"tok-ro":    sessionWithRoles(domain.RoleReadOnly),
 			}}},
-			Agents: agentshttp.Deps{Agents: matrixAgents{}, Discovery: matrixDiscovery{}, Jobs: matrixQueue{}},
+			Agents: agentshttp.Deps{Agents: matrixAgents{}, Discovery: matrixDiscovery{}, Jobs: matrixQueue{}, Updates: matrixAgents{}},
 			Jobs:   jobshttp.Deps{Service: matrixJobs{}},
 			Platform: platformhttp.Deps{
 				Settings: &matrixSettings{},
@@ -216,6 +237,8 @@ func TestRBACMatrix(t *testing.T) {
 		{"PATCH", "/api/agents/ag-1", `{"disabled":true}`},
 		{"POST", "/api/agents/ag-1/revoke", ""},
 		{"DELETE", "/api/agents/ag-1", ""},
+		{"POST", "/api/agents/ag-1/update", `{"artifact_id":"art-1"}`},
+		{"DELETE", "/api/agents/updates/artifacts/art-1", ""},
 	} {
 		rec := matrixDo(t, mux, w.method, w.target, w.body, "tok-op")
 		require.Equal(t, http.StatusForbidden, rec.Code, "%s %s operator -> 403", w.method, w.target)
@@ -263,6 +286,9 @@ func TestUIRoleRulesTable(t *testing.T) {
 		"PATCH /api/agents/:id":                      admin,
 		"POST /api/agents/:id/revoke":                admin,
 		"DELETE /api/agents/:id":                     admin,
+		"POST /api/agents/updates/artifacts":         admin,
+		"DELETE /api/agents/updates/artifacts/:id":   admin,
+		"POST /api/agents/:id/update":                admin,
 		"POST /api/restore/plan":                     op,
 		"POST /api/restore/confirm":                  op,
 		"POST /api/restore/execute":                  op,

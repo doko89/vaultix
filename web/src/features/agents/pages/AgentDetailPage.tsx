@@ -9,8 +9,10 @@ import {
   useAgent,
   useAgentPolicies,
   useDeleteAgent,
+  useRequestUpdate,
   useRevokeAgent,
   useSetAgentDisabled,
+  useUpdateDescribe,
 } from "../hooks";
 import { StatusCell } from "./AgentsPage";
 
@@ -19,10 +21,12 @@ export function AgentDetailPage() {
   const navigate = useNavigate();
   const detail = useAgent(agentId);
   const policies = useAgentPolicies(agentId);
+  const update = useUpdateDescribe(agentId);
   const setDisabled = useSetAgentDisabled();
   const revoke = useRevokeAgent();
   const remove = useDeleteAgent(() => navigate("/agents"));
-  const [confirm, setConfirm] = useState<"disable" | "enable" | "revoke" | "delete" | null>(null);
+  const request = useRequestUpdate();
+  const [confirm, setConfirm] = useState<"disable" | "enable" | "revoke" | "delete" | "update" | null>(null);
 
   const agent = detail.data;
   const diskUsed =
@@ -158,6 +162,28 @@ export function AgentDetailPage() {
                   </Button>
                 )}
               </div>
+              {update.data !== undefined &&
+                agent.status !== "revoked" &&
+                (update.data.pending?.status === "pending" ? (
+                  <p className="text-sm text-gray-500">
+                    Update to {update.data.pending.target_version} ({update.data.pending.goos}/
+                    {update.data.pending.goarch}) pending — applies when the agent is idle.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {update.data.pending?.status === "failed" && (
+                      <p className="text-sm text-destructive">
+                        Update to {update.data.pending.target_version} failed:{" "}
+                        {update.data.pending.error !== "" ? update.data.pending.error : "unknown error"}
+                      </p>
+                    )}
+                    {update.data.available && update.data.latest !== null && (
+                      <Button type="button" variant="outline" size="sm" onClick={() => setConfirm("update")}>
+                        Update to {update.data.latest.version}
+                      </Button>
+                    )}
+                  </div>
+                ))}
             </div>
           )}
         </CardContent>
@@ -211,6 +237,20 @@ export function AgentDetailPage() {
           onConfirm={() => {
             if (agentId !== undefined) {
               remove.mutate(agentId);
+            }
+          }}
+          onClose={() => setConfirm(null)}
+        />
+        <ConfirmDialog
+          open={confirm === "update"}
+          title={`Update agent to ${update.data?.latest?.version ?? "latest"}?`}
+          body="The agent downloads the binary from the manager, verifies its checksum, and restarts itself once idle. A backup of the current binary is kept for manual recovery."
+          confirmLabel="Update agent"
+          busy={request.isPending}
+          onConfirm={() => {
+            const latest = update.data?.latest;
+            if (agentId !== undefined && latest !== undefined && latest !== null) {
+              request.mutate({ agentId, artifactId: latest.id }, { onSuccess: () => setConfirm(null) });
             }
           }}
           onClose={() => setConfirm(null)}

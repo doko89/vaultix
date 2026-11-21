@@ -31,6 +31,7 @@ import (
 	"github.com/vaultix/vaultix/internal/adapter/session"
 	"github.com/vaultix/vaultix/internal/domain"
 	agentuc "github.com/vaultix/vaultix/internal/usecase/agent"
+	updateuc "github.com/vaultix/vaultix/internal/usecase/agentupdate"
 	apikeyuc "github.com/vaultix/vaultix/internal/usecase/apikey"
 	audituc "github.com/vaultix/vaultix/internal/usecase/audit"
 	authuc "github.com/vaultix/vaultix/internal/usecase/auth"
@@ -269,6 +270,10 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger,
 	if err != nil {
 		return nil, fmt.Errorf("discovery service: %w", err)
 	}
+	updateSvc, err := updateuc.NewService(repos.Updates, repos.Agents)
+	if err != nil {
+		return nil, fmt.Errorf("agent update service: %w", err)
+	}
 
 	policySvc := policyuc.NewService(repos.Policies,
 		policyuc.WithStorage(repos.Storage), policyuc.WithStacks(repos.Stacks))
@@ -372,6 +377,7 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger,
 				},
 				Grants:   dataPlane,
 				Restores: dataPlane,
+				Updates:  updateSvc,
 				Logger:   log,
 			},
 			Policies: policieshttp.Deps{

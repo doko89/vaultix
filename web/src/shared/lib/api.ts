@@ -141,7 +141,8 @@ async function request<T>(
       headers[k] = v;
     });
   }
-  if (body !== undefined) {
+  const isForm = body instanceof FormData;
+  if (body !== undefined && !isForm) {
     headers["Content-Type"] = "application/json";
   }
   if (MUTATING.has(method)) {
@@ -155,7 +156,7 @@ async function request<T>(
     signal: AbortSignal.timeout(timeoutMs),
   };
   if (body !== undefined) {
-    init.body = JSON.stringify(body);
+    init.body = isForm ? body : JSON.stringify(body);
   }
 
   let response: Response;

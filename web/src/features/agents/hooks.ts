@@ -4,13 +4,18 @@ import { errorText } from "@/shared/lib/api";
 import { useToasts } from "@/shared/ui/toast";
 import {
   deleteAgent,
+  deleteArtifact,
+  describeUpdate,
   getAgent,
   issueEnrollToken,
   listAgentPolicies,
   listAgentResources,
   listAgents,
+  listArtifacts,
+  requestUpdate,
   revokeAgent,
   setAgentDisabled,
+  uploadArtifact,
 } from "./api";
 import type { AgentFilters } from "./api";
 
@@ -101,5 +106,69 @@ export function useAgentResources(agentId: ID | undefined, kind?: string) {
       return listAgentResources(agentId, kind === "" ? undefined : kind);
     },
     enabled: agentId !== undefined,
+  });
+}
+
+export function useArtifacts() {
+  return useQuery({
+    queryKey: [...AGENTS_KEY, "artifacts"],
+    queryFn: () => listArtifacts(),
+  });
+}
+
+export function useUploadArtifact(onDone: () => void) {
+  const queryClient = useQueryClient();
+  const { push } = useToasts();
+  return useMutation({
+    mutationFn: ({ version, goos, goarch, binary }: { version: string; goos: string; goarch: string; binary: File }) =>
+      uploadArtifact(version, goos, goarch, binary),
+    onSuccess: (art) => {
+      push({ tone: "success", title: `Artifact ${art.version} (${art.goos}/${art.goarch}) uploaded` });
+      void queryClient.invalidateQueries({ queryKey: [...AGENTS_KEY] });
+      onDone();
+    },
+    onError: (err) => push({ tone: "error", title: "Could not upload artifact", message: errorText(err) }),
+  });
+}
+
+export function useDeleteArtifact() {
+  const queryClient = useQueryClient();
+  const { push } = useToasts();
+  return useMutation({
+    mutationFn: (artifactId: ID) => deleteArtifact(artifactId),
+    onSuccess: () => {
+      push({ tone: "success", title: "Artifact deleted" });
+      void queryClient.invalidateQueries({ queryKey: [...AGENTS_KEY] });
+    },
+    onError: (err) => push({ tone: "error", title: "Could not delete artifact", message: errorText(err) }),
+  });
+}
+
+export function useUpdateDescribe(agentId: ID | undefined, pollWhenPending = true) {
+  const query = useQuery({
+    queryKey: [...AGENTS_KEY, "update", agentId ?? ""],
+    queryFn: () => {
+      if (agentId === undefined) throw new Error("agent id is required");
+      return describeUpdate(agentId);
+    },
+    enabled: agentId !== undefined,
+    refetchInterval: (query) => {
+      if (!pollWhenPending) return false;
+      return query.state.data?.pending?.status === "pending" ? 5_000 : false;
+    },
+  });
+  return query;
+}
+
+export function useRequestUpdate() {
+  const queryClient = useQueryClient();
+  const { push } = useToasts();
+  return useMutation({
+    mutationFn: ({ agentId, artifactId }: { agentId: ID; artifactId: ID }) => requestUpdate(agentId, artifactId),
+    onSuccess: (slot) => {
+      push({ tone: "success", title: `Update to ${slot.target_version} requested` });
+      void queryClient.invalidateQueries({ queryKey: [...AGENTS_KEY] });
+    },
+    onError: (err) => push({ tone: "error", title: "Could not request update", message: errorText(err) }),
   });
 }

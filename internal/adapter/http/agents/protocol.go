@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 
@@ -118,7 +119,21 @@ func (h *handler) handlePoll(w http.ResponseWriter, r *http.Request) {
 	if cancelled == nil {
 		cancelled = []string{}
 	}
-	writeJSON(w, http.StatusOK, pollResponse{Jobs: jobs, CancelledJobIDs: cancelled, ServerTime: h.now()})
+	// The update directive is advisory: resolving it must never fail a
+	// poll (job dispatch matters more), so errors log and omit.
+	var update *updateDirective
+	if h.updates != nil {
+		dir, err := h.updates.PendingDirective(ctx, cred.AgentID)
+		if err != nil {
+			h.log.Warn("agents poll update lookup failed", "agent_id", cred.AgentID, "error", err)
+		} else if dir != nil {
+			update = &updateDirective{
+				Version: dir.Version, GOOS: dir.GOOS, GOARCH: dir.GOARCH,
+				SHA256: hex.EncodeToString(dir.SHA256), SizeBytes: dir.SizeBytes,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, pollResponse{Jobs: jobs, CancelledJobIDs: cancelled, Update: update, ServerTime: h.now()})
 }
 
 // handleReport accepts a job report and/or a discovery snapshot.

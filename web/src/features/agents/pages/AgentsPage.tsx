@@ -7,6 +7,7 @@ import { useDebouncedValue } from "@/shared/hooks/use-debounce";
 import { PresenceBadge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
+import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
 import { Dialog } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { PageHeader } from "@/shared/ui/page-header";
@@ -14,7 +15,7 @@ import { Pagination } from "@/shared/ui/pagination";
 import { Select } from "@/shared/ui/select";
 import { TableSkeleton } from "@/shared/ui/skeleton";
 import { useToasts } from "@/shared/ui/toast";
-import { useAgents, useIssueEnrollToken } from "../hooks";
+import { useAgents, useArtifacts, useDeleteArtifact, useIssueEnrollToken, useUploadArtifact } from "../hooks";
 import type { Agent } from "../types";
 
 const PAGE_SIZE = 25;
@@ -117,6 +118,153 @@ function EnrollTokenDialog({ open, onClose }: { open: boolean; onClose: () => vo
         </div>
       )}
     </Dialog>
+  );
+}
+
+function ArtifactManager() {
+  const [version, setVersion] = useState("");
+  const [goos, setGoos] = useState("linux");
+  const [goarch, setGoarch] = useState("amd64");
+  const [file, setFile] = useState<File | undefined>(undefined);
+  const [showErrors, setShowErrors] = useState(false);
+  const artifacts = useArtifacts();
+  const remove = useDeleteArtifact();
+  const [confirmDelete, setConfirmDelete] = useState<string | undefined>(undefined);
+  const upload = useUploadArtifact(() => {
+    setVersion("");
+    setFile(undefined);
+    setShowErrors(false);
+  });
+
+  function submit(): void {
+    setShowErrors(true);
+    if (version.trim() === "" || file === undefined) return;
+    upload.mutate({ version: version.trim(), goos, goarch, binary: file });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Agent updates</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label htmlFor="artifact-version" className="mb-1 block text-sm font-medium">
+                Version
+              </label>
+              <Input
+                id="artifact-version"
+                placeholder="v0.3.0"
+                className="w-36"
+                value={version}
+                onChange={(e) => setVersion(e.target.value)}
+              />
+              {showErrors && version.trim() === "" && (
+                <p className="mt-1 text-xs text-destructive">Version is required.</p>
+              )}
+            </div>
+            <div>
+              <label htmlFor="artifact-goos" className="mb-1 block text-sm font-medium">
+                OS
+              </label>
+              <Select
+                id="artifact-goos"
+                aria-label="Artifact OS"
+                className="w-auto"
+                value={goos}
+                onChange={(e) => setGoos(e.target.value)}
+              >
+                <option value="linux">linux</option>
+                <option value="darwin">darwin</option>
+              </Select>
+            </div>
+            <div>
+              <label htmlFor="artifact-goarch" className="mb-1 block text-sm font-medium">
+                Arch
+              </label>
+              <Select
+                id="artifact-goarch"
+                aria-label="Artifact arch"
+                className="w-auto"
+                value={goarch}
+                onChange={(e) => setGoarch(e.target.value)}
+              >
+                <option value="amd64">amd64</option>
+                <option value="arm64">arm64</option>
+              </Select>
+            </div>
+            <div>
+              <label htmlFor="artifact-binary" className="mb-1 block text-sm font-medium">
+                Binary
+              </label>
+              <Input
+                id="artifact-binary"
+                type="file"
+                className="w-auto"
+                onChange={(e) => setFile(e.target.files?.[0])}
+              />
+              {showErrors && file === undefined && (
+                <p className="mt-1 text-xs text-destructive">Binary file is required.</p>
+              )}
+            </div>
+            <Button type="button" onClick={submit} disabled={upload.isPending}>
+              {upload.isPending ? "Uploading…" : "Upload artifact"}
+            </Button>
+          </div>
+          {artifacts.isLoading ? (
+            <TableSkeleton rows={3} cols={4} />
+          ) : artifacts.data === undefined ? (
+            <p className="text-sm text-destructive">Could not load artifacts: {errorText(artifacts.error)}</p>
+          ) : artifacts.data.items.length === 0 ? (
+            <p className="text-sm text-gray-500">
+              No artifacts hosted. Upload a release binary to offer one-click updates.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {artifacts.data.items.map((a) => (
+                <li
+                  key={a.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-2 text-sm"
+                >
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{a.version}</span>
+                    <span className="text-xs text-gray-500">
+                      {a.goos}/{a.goarch} · {formatBytes(a.size_bytes)}
+                    </span>
+                    <code className="font-mono text-xs text-gray-500" title={`sha256:${a.sha256}`}>
+                      {a.sha256.slice(0, 12)}…
+                    </code>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmDelete(a.id)}
+                  >
+                    Delete
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </CardContent>
+      <ConfirmDialog
+        open={confirmDelete !== undefined}
+        title="Delete artifact?"
+        body="Agents with a pending update to this binary will fail with an actionable error instead of updating."
+        confirmLabel="Delete artifact"
+        busy={remove.isPending}
+        onConfirm={() => {
+          if (confirmDelete !== undefined) {
+            remove.mutate(confirmDelete, { onSuccess: () => setConfirmDelete(undefined) });
+          }
+        }}
+        onClose={() => setConfirmDelete(undefined)}
+      />
+    </Card>
   );
 }
 
@@ -236,6 +384,8 @@ export function AgentsPage() {
           )}
         </CardContent>
       </Card>
+
+      <ArtifactManager />
 
       <EnrollTokenDialog open={enrollOpen} onClose={() => setEnrollOpen(false)} />
     </div>

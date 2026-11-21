@@ -26,6 +26,18 @@ type Agent struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentArtifact struct {
+	ID         pgtype.UUID        `json:"id"`
+	Version    string             `json:"version"`
+	Goos       string             `json:"goos"`
+	Goarch     string             `json:"goarch"`
+	Sha256     []byte             `json:"sha256"`
+	SizeBytes  int64              `json:"size_bytes"`
+	Bytes      []byte             `json:"bytes"`
+	UploadedBy string             `json:"uploaded_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentCredential struct {
 	ID             pgtype.UUID        `json:"id"`
 	AgentID        pgtype.UUID        `json:"agent_id"`
@@ -49,6 +61,18 @@ type AgentHeartbeat struct {
 	DiskFreeBytes  int64              `json:"disk_free_bytes"`
 	RunningJobs    int32              `json:"running_jobs"`
 	Payload        []byte             `json:"payload"`
+}
+
+type AgentUpdate struct {
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	TargetVersion string             `json:"target_version"`
+	Goos          string             `json:"goos"`
+	Goarch        string             `json:"goarch"`
+	Status        string             `json:"status"`
+	Error         string             `json:"error"`
+	RequestedBy   string             `json:"requested_by"`
+	RequestedAt   pgtype.Timestamptz `json:"requested_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ApiKey struct {

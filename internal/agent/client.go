@@ -26,6 +26,8 @@ const (
 	pathRestoresPoll   = "/api/agent/restores/poll"
 	pathDownloadGrants = "/api/agent/restores/%s/download-grants"
 	pathRestoreReport  = "/api/agent/restores/%s/report"
+	pathUpdateDownload = "/api/agent/update/download"
+	pathUpdateReport   = "/api/agent/update/report"
 
 	maxErrorBodyByte = 4 << 10
 	defaultPollLimit = 5
@@ -58,10 +60,27 @@ type HeartbeatResponse struct {
 	ServerTime  time.Time `json:"server_time,omitempty"`
 }
 
+// UpdatePackage is one downloaded agent binary plus its verified metadata.
+type UpdatePackage struct {
+	Version   string
+	SHA256    string
+	SizeBytes int64
+	Bytes     []byte
+}
+
+// UpdateReportRequest reports a self-update outcome.
+type UpdateReportRequest struct {
+	Status  string `json:"status"`
+	Version string `json:"version"`
+	Error   string `json:"error,omitempty"`
+}
+
 // ManagerClient is the agent's view of the Manager control plane.
 type ManagerClient interface {
 	Heartbeat(ctx context.Context, req HeartbeatRequest) (HeartbeatResponse, error)
 	PollJobs(ctx context.Context, limit int) (PollResponse, error)
+	DownloadUpdate(ctx context.Context) (UpdatePackage, error)
+	ReportUpdate(ctx context.Context, req UpdateReportRequest) error
 	ReportJob(ctx context.Context, rep JobReportPayload) error
 	ReportResources(ctx context.Context, resources []ResourceReport) error
 	UploadGrants(ctx context.Context, jobID string, req UploadGrantsRequest) (UploadGrantsResponse, error)
@@ -177,6 +196,49 @@ func (c *HTTPManagerClient) ReportRestore(ctx context.Context, restoreID string,
 	return c.do(ctx, http.MethodPost, u, req, nil)
 }
 
+// maxUpdateDownloadBytes caps one artifact download (manager caps uploads
+// at 64MB; the extra headroom covers framing, never real bytes).
+const maxUpdateDownloadBytes = (64 << 20) + (1 << 20)
+
+// DownloadUpdate fetches the agent's pending target bytes.
+func (c *HTTPManagerClient) DownloadUpdate(ctx context.Context) (UpdatePackage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+pathUpdateDownload, nil)
+	if err != nil {
+		return UpdatePackage{}, fmt.Errorf("agent: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return UpdatePackage{}, fmt.Errorf("agent: manager GET %s: %w", pathUpdateDownload, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyByte))
+		return UpdatePackage{}, fmt.Errorf("agent: manager GET %s: status %s: %s",
+			pathUpdateDownload, resp.Status, strings.TrimSpace(string(detail)))
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxUpdateDownloadBytes+1))
+	if err != nil {
+		return UpdatePackage{}, fmt.Errorf("agent: read update bytes: %w", err)
+	}
+	if int64(len(data)) > maxUpdateDownloadBytes {
+		return UpdatePackage{}, fmt.Errorf("agent: update exceeds %d bytes", maxUpdateDownloadBytes)
+	}
+	return UpdatePackage{
+		Version:   resp.Header.Get("X-Vaultix-Version"),
+		SHA256:    resp.Header.Get("X-Vaultix-SHA256"),
+		SizeBytes: int64(len(data)),
+		Bytes:     data,
+	}, nil
+}
+
+func (c *HTTPManagerClient) ReportUpdate(ctx context.Context, req UpdateReportRequest) error {
+	return c.do(ctx, http.MethodPost, c.baseURL+pathUpdateReport, req, nil)
+}
+
 func (c *HTTPManagerClient) do(ctx context.Context, method, url string, in, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -231,11 +293,14 @@ type StubManagerClient struct {
 	OnPollRestore     func(agentID string) (*RestoreJob, error)
 	OnDownloadGrants  func(restoreID string, keys []string) (DownloadGrantsResponse, error)
 	OnReportRestore   func(restoreID string, req RestoreReportRequest) error
+	OnDownloadUpdate  func() (UpdatePackage, error)
+	OnReportUpdate    func(req UpdateReportRequest) error
 
-	Heartbeats []HeartbeatRequest
-	Reports    []JobReportPayload
-	Resources  [][]ResourceReport
-	Restores   []RestoreReportRequest
+	Heartbeats    []HeartbeatRequest
+	Reports       []JobReportPayload
+	Resources     [][]ResourceReport
+	Restores      []RestoreReportRequest
+	UpdateReports []UpdateReportRequest
 }
 
 func (s *StubManagerClient) Heartbeat(_ context.Context, req HeartbeatRequest) (HeartbeatResponse, error) {
@@ -315,6 +380,21 @@ func (s *StubManagerClient) ReportRestore(_ context.Context, restoreID string, r
 	s.Restores = append(s.Restores, req)
 	if s.OnReportRestore != nil {
 		return s.OnReportRestore(restoreID, req)
+	}
+	return nil
+}
+
+func (s *StubManagerClient) DownloadUpdate(_ context.Context) (UpdatePackage, error) {
+	if s.OnDownloadUpdate != nil {
+		return s.OnDownloadUpdate()
+	}
+	return UpdatePackage{}, fmt.Errorf("agent: stub: no DownloadUpdate handler")
+}
+
+func (s *StubManagerClient) ReportUpdate(_ context.Context, req UpdateReportRequest) error {
+	s.UpdateReports = append(s.UpdateReports, req)
+	if s.OnReportUpdate != nil {
+		return s.OnReportUpdate(req)
 	}
 	return nil
 }

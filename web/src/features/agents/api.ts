@@ -2,9 +2,13 @@ import { api, qs } from "@/shared/lib/api";
 import type { ID } from "@/shared/types";
 import type {
   Agent,
+  AgentArtifact,
+  AgentArtifactList,
   AgentList,
   AgentPolicies,
   AgentResources,
+  AgentUpdateInfo,
+  AgentUpdateSlot,
   EnrollToken,
 } from "./types";
 
@@ -49,4 +53,29 @@ export function listAgentResources(agentId: ID, kind?: string): Promise<AgentRes
   return api.get<AgentResources>(
     `/agents/${encodeURIComponent(agentId)}/resources${qs({ kind })}`,
   );
+}
+
+export function listArtifacts(): Promise<AgentArtifactList> {
+  return api.get<AgentArtifactList>("/agents/updates/artifacts");
+}
+
+export function uploadArtifact(version: string, goos: string, goarch: string, binary: File): Promise<AgentArtifact> {
+  const form = new FormData();
+  form.set("version", version);
+  form.set("goos", goos);
+  form.set("goarch", goarch);
+  form.set("binary", binary);
+  return api.post<AgentArtifact>("/agents/updates/artifacts", form, { timeoutMs: 300_000 });
+}
+
+export function deleteArtifact(artifactId: ID): Promise<void> {
+  return api.delete<void>(`/agents/updates/artifacts/${encodeURIComponent(artifactId)}`);
+}
+
+export function describeUpdate(agentId: ID): Promise<AgentUpdateInfo> {
+  return api.get<AgentUpdateInfo>(`/agents/${encodeURIComponent(agentId)}/update`);
+}
+
+export function requestUpdate(agentId: ID, artifactId: ID): Promise<AgentUpdateSlot> {
+  return api.post<AgentUpdateSlot>(`/agents/${encodeURIComponent(agentId)}/update`, { artifact_id: artifactId });
 }
