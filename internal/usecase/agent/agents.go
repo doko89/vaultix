@@ -96,7 +96,7 @@ func (s *Service) Heartbeat(ctx context.Context, in HeartbeatInput) (*HeartbeatR
 	return &HeartbeatResult{
 		Heartbeat: *hb,
 		Status:    ag.Status(now, s.heartbeatTimeout),
-		Outdated:  s.IsOutdated(ag.Version),
+		Outdated:  s.outdatedFor(ctx, ag),
 	}, nil
 }
 
@@ -186,7 +186,7 @@ func (s *Service) GetAgent(ctx context.Context, id string) (*AgentView, error) {
 	return &AgentView{
 		Agent:    *ag,
 		Status:   ag.Status(now, s.heartbeatTimeout),
-		Outdated: s.IsOutdated(ag.Version),
+		Outdated: s.outdatedFor(ctx, ag),
 	}, nil
 }
 
@@ -216,12 +216,18 @@ func (s *Service) ListAgents(ctx context.Context, opts domain.ListOptions, filte
 		return nil, err
 	}
 	now := s.clock.Now().UTC()
+	var arts []domain.AgentArtifact
+	if s.updates != nil {
+		if all, err := s.updates.ListArtifacts(ctx); err == nil {
+			arts = all
+		}
+	}
 	out := &AgentListResult{Total: res.Total}
 	for _, ag := range res.Items {
 		v := AgentView{
 			Agent:    ag,
 			Status:   ag.Status(now, s.heartbeatTimeout),
-			Outdated: s.IsOutdated(ag.Version),
+			Outdated: s.outdatedAgainst(arts, &ag),
 		}
 		if filter.Status != "" && v.Status != filter.Status {
 			continue

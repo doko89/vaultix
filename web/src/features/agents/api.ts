@@ -2,7 +2,6 @@ import { api, qs } from "@/shared/lib/api";
 import type { ID } from "@/shared/types";
 import type {
   Agent,
-  AgentArtifact,
   AgentArtifactList,
   AgentList,
   AgentPolicies,
@@ -10,6 +9,7 @@ import type {
   AgentUpdateInfo,
   AgentUpdateSlot,
   EnrollToken,
+  UpdateCheckResult,
 } from "./types";
 
 export interface AgentFilters {
@@ -59,13 +59,8 @@ export function listArtifacts(): Promise<AgentArtifactList> {
   return api.get<AgentArtifactList>("/agents/updates/artifacts");
 }
 
-export function uploadArtifact(version: string, goos: string, goarch: string, binary: File): Promise<AgentArtifact> {
-  const form = new FormData();
-  form.set("version", version);
-  form.set("goos", goos);
-  form.set("goarch", goarch);
-  form.set("binary", binary);
-  return api.post<AgentArtifact>("/agents/updates/artifacts", form, { timeoutMs: 300_000 });
+export function checkUpdates(): Promise<UpdateCheckResult> {
+  return api.post<UpdateCheckResult>("/agents/updates/check", undefined, { timeoutMs: 300_000 });
 }
 
 export function deleteArtifact(artifactId: ID): Promise<void> {

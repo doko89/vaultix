@@ -59,6 +59,12 @@ type Config struct {
 	DispatchIntervalSecs int `mapstructure:"dispatch_interval_seconds"`
 	// JanitorIntervalSecs ticks expired-session cleanup.
 	JanitorIntervalSecs int `mapstructure:"janitor_interval_seconds"`
+	// UpdateRepo is the GitHub repo agent binaries are synced from.
+	UpdateRepo string `mapstructure:"update_repo"`
+	// UpdateAPI overrides the GitHub API base (tests point it at a fake).
+	UpdateAPI string `mapstructure:"update_api"`
+	// UpdateCheckIntervalSecs ticks agent-binary sync; <=0 disables.
+	UpdateCheckIntervalSecs int `mapstructure:"update_check_interval_seconds"`
 
 	S3   S3Config   `mapstructure:"s3"`
 	SMTP SMTPConfig `mapstructure:"smtp"`
@@ -94,6 +100,30 @@ func (c Config) JanitorInterval() time.Duration {
 		return 5 * time.Minute
 	}
 	return time.Duration(c.JanitorIntervalSecs) * time.Second
+}
+
+// UpdateCheckInterval returns the agent-binary sync tick; <=0 disables.
+func (c Config) UpdateCheckInterval() time.Duration {
+	if c.UpdateCheckIntervalSecs <= 0 {
+		return 0
+	}
+	return time.Duration(c.UpdateCheckIntervalSecs) * time.Second
+}
+
+// UpdateRepoOrDefault returns the release repo to sync agent binaries from.
+func (c Config) UpdateRepoOrDefault() string {
+	if strings.TrimSpace(c.UpdateRepo) == "" {
+		return "doko89/vaultix"
+	}
+	return strings.TrimSpace(c.UpdateRepo)
+}
+
+// UpdateAPIOrDefault returns the GitHub API base for release sync.
+func (c Config) UpdateAPIOrDefault() string {
+	if strings.TrimSpace(c.UpdateAPI) == "" {
+		return "https://api.github.com"
+	}
+	return strings.TrimSpace(strings.TrimSuffix(c.UpdateAPI, "/"))
 }
 
 // Validate checks required fields.
@@ -207,6 +237,9 @@ func loadConfig(configPath string) (Config, error) {
 	viper.SetDefault("heartbeat_timeout_seconds", 300)
 	viper.SetDefault("dispatch_interval_seconds", 30)
 	viper.SetDefault("janitor_interval_seconds", 300)
+	viper.SetDefault("update_repo", "doko89/vaultix")
+	viper.SetDefault("update_api", "https://api.github.com")
+	viper.SetDefault("update_check_interval_seconds", 21600)
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {

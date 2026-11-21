@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -380,6 +381,134 @@ func TestReportUpdate(t *testing.T) {
 	if slot.Status != domain.AgentUpdateFailed || slot.Error != "swap failed" {
 		t.Fatalf("slot: %+v", slot)
 	}
+}
+
+type fakeSource struct {
+	rel   Release
+	files map[string][]byte
+	err   error
+}
+
+func (f *fakeSource) LatestRelease(_ context.Context) (Release, error) {
+	if f.err != nil {
+		return Release{}, f.err
+	}
+	return f.rel, nil
+}
+
+func (f *fakeSource) Download(_ context.Context, url string, _ int64) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	data, ok := f.files[url]
+	if !ok {
+		return nil, fmt.Errorf("no such file: %s", url)
+	}
+	return data, nil
+}
+
+func sumsFor(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	var b strings.Builder
+	for name, data := range files {
+		sum := sha256.Sum256(data)
+		fmt.Fprintf(&b, "%x  %s\n", sum, name)
+	}
+	return []byte(b.String())
+}
+
+func TestSyncReleases(t *testing.T) {
+	ctx := context.Background()
+	binAMD := []byte("agent-binary-amd64")
+	binARM := []byte("agent-binary-arm64")
+	newSvc := func(t *testing.T, src *fakeSource) (*Service, *fakeUpdateRepo) {
+		t.Helper()
+		updates := newFakeUpdateRepo()
+		svc, err := NewService(updates, newFakeAgentRepo(), WithReleaseSource(src))
+		if err != nil {
+			t.Fatalf("new service: %v", err)
+		}
+		return svc, updates
+	}
+
+	t.Run("unconfigured", func(t *testing.T) {
+		svc, _, _ := testSetup()
+		if _, err := svc.SyncReleases(ctx); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("want ErrValidation, got %v", err)
+		}
+	})
+
+	t.Run("caches missing binaries", func(t *testing.T) {
+		src := &fakeSource{
+			rel: Release{Tag: "v2.0.0", Assets: []ReleaseAsset{
+				{Name: "vaultix-agent-linux-amd64", URL: "u-amd64"},
+				{Name: "vaultix-agent-linux-arm64", URL: "u-arm64"},
+				{Name: "sha256sums.txt", URL: "u-sums"},
+			}},
+			files: map[string][]byte{
+				"u-amd64": binAMD,
+				"u-arm64": binARM,
+				"u-sums":  sumsFor(t, map[string][]byte{"vaultix-agent-linux-amd64": binAMD, "vaultix-agent-linux-arm64": binARM}),
+			},
+		}
+		svc, updates := newSvc(t, src)
+		status, err := svc.SyncReleases(ctx)
+		if err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+		if len(status.Cached) != 2 {
+			t.Fatalf("cached: %+v", status)
+		}
+		arts, _ := updates.ListArtifacts(ctx)
+		if len(arts) != 2 {
+			t.Fatalf("stored: %d", len(arts))
+		}
+		// Second sync is a no-op.
+		status, err = svc.SyncReleases(ctx)
+		if err != nil {
+			t.Fatalf("resync: %v", err)
+		}
+		if len(status.Cached) != 0 {
+			t.Fatalf("resync cached: %+v", status)
+		}
+	})
+
+	t.Run("checksum mismatch", func(t *testing.T) {
+		src := &fakeSource{
+			rel: Release{Tag: "v9.9.9", Assets: []ReleaseAsset{
+				{Name: "vaultix-agent-linux-amd64", URL: "u-amd64"},
+				{Name: "sha256sums.txt", URL: "u-sums"},
+			}},
+			files: map[string][]byte{
+				"u-amd64": binAMD,
+				"u-sums":  sumsFor(t, map[string][]byte{"vaultix-agent-linux-amd64": []byte("other-bytes")}),
+			},
+		}
+		svc, _ := newSvc(t, src)
+		if _, err := svc.SyncReleases(ctx); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("want ErrValidation, got %v", err)
+		}
+	})
+
+	t.Run("missing sums", func(t *testing.T) {
+		src := &fakeSource{
+			rel: Release{Tag: "v9.9.9", Assets: []ReleaseAsset{
+				{Name: "vaultix-agent-linux-amd64", URL: "u-amd64"},
+			}},
+			files: map[string][]byte{"u-amd64": binAMD},
+		}
+		svc, _ := newSvc(t, src)
+		if _, err := svc.SyncReleases(ctx); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("want ErrValidation, got %v", err)
+		}
+	})
+
+	t.Run("source error", func(t *testing.T) {
+		svc, _ := newSvc(t, &fakeSource{err: errors.New("boom")})
+		if _, err := svc.SyncReleases(ctx); err == nil {
+			t.Fatal("want error")
+		}
+	})
 }
 
 func TestDescribe(t *testing.T) {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Check, Copy, Plus } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { errorText } from "@/shared/lib/api";
 import { formatBytes, formatDateTime, timeAgo } from "@/shared/lib/format";
 import { useDebouncedValue } from "@/shared/hooks/use-debounce";
@@ -15,7 +15,7 @@ import { Pagination } from "@/shared/ui/pagination";
 import { Select } from "@/shared/ui/select";
 import { TableSkeleton } from "@/shared/ui/skeleton";
 import { useToasts } from "@/shared/ui/toast";
-import { useAgents, useArtifacts, useDeleteArtifact, useIssueEnrollToken, useUploadArtifact } from "../hooks";
+import { useAgents, useArtifacts, useCheckUpdates, useDeleteArtifact, useIssueEnrollToken } from "../hooks";
 import type { Agent } from "../types";
 
 const PAGE_SIZE = 25;
@@ -122,104 +122,34 @@ function EnrollTokenDialog({ open, onClose }: { open: boolean; onClose: () => vo
 }
 
 function ArtifactManager() {
-  const [version, setVersion] = useState("");
-  const [goos, setGoos] = useState("linux");
-  const [goarch, setGoarch] = useState("amd64");
-  const [file, setFile] = useState<File | undefined>(undefined);
-  const [showErrors, setShowErrors] = useState(false);
   const artifacts = useArtifacts();
   const remove = useDeleteArtifact();
   const [confirmDelete, setConfirmDelete] = useState<string | undefined>(undefined);
-  const upload = useUploadArtifact(() => {
-    setVersion("");
-    setFile(undefined);
-    setShowErrors(false);
-  });
-
-  function submit(): void {
-    setShowErrors(true);
-    if (version.trim() === "" || file === undefined) return;
-    upload.mutate({ version: version.trim(), goos, goarch, binary: file });
-  }
+  const check = useCheckUpdates();
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Agent updates</CardTitle>
+        <div className="flex items-start justify-between gap-4">
+          <CardTitle>Agent updates</CardTitle>
+          <Button type="button" variant="outline" size="sm" onClick={() => check.mutate()} disabled={check.isPending}>
+            {check.isPending ? "Checking…" : "Check for updates"}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label htmlFor="artifact-version" className="mb-1 block text-sm font-medium">
-                Version
-              </label>
-              <Input
-                id="artifact-version"
-                placeholder="v0.3.0"
-                className="w-36"
-                value={version}
-                onChange={(e) => setVersion(e.target.value)}
-              />
-              {showErrors && version.trim() === "" && (
-                <p className="mt-1 text-xs text-destructive">Version is required.</p>
-              )}
-            </div>
-            <div>
-              <label htmlFor="artifact-goos" className="mb-1 block text-sm font-medium">
-                OS
-              </label>
-              <Select
-                id="artifact-goos"
-                aria-label="Artifact OS"
-                className="w-auto"
-                value={goos}
-                onChange={(e) => setGoos(e.target.value)}
-              >
-                <option value="linux">linux</option>
-                <option value="darwin">darwin</option>
-              </Select>
-            </div>
-            <div>
-              <label htmlFor="artifact-goarch" className="mb-1 block text-sm font-medium">
-                Arch
-              </label>
-              <Select
-                id="artifact-goarch"
-                aria-label="Artifact arch"
-                className="w-auto"
-                value={goarch}
-                onChange={(e) => setGoarch(e.target.value)}
-              >
-                <option value="amd64">amd64</option>
-                <option value="arm64">arm64</option>
-              </Select>
-            </div>
-            <div>
-              <label htmlFor="artifact-binary" className="mb-1 block text-sm font-medium">
-                Binary
-              </label>
-              <Input
-                id="artifact-binary"
-                type="file"
-                className="w-auto"
-                onChange={(e) => setFile(e.target.files?.[0])}
-              />
-              {showErrors && file === undefined && (
-                <p className="mt-1 text-xs text-destructive">Binary file is required.</p>
-              )}
-            </div>
-            <Button type="button" onClick={submit} disabled={upload.isPending}>
-              {upload.isPending ? "Uploading…" : "Upload artifact"}
-            </Button>
-          </div>
+          <p className="text-sm text-gray-500">
+            The manager syncs agent binaries from releases automatically. Cached binaries below can be
+            offered to outdated agents from their detail page.
+          </p>
           {artifacts.isLoading ? (
             <TableSkeleton rows={3} cols={4} />
           ) : artifacts.data === undefined ? (
             <p className="text-sm text-destructive">Could not load artifacts: {errorText(artifacts.error)}</p>
           ) : artifacts.data.items.length === 0 ? (
             <p className="text-sm text-gray-500">
-              No artifacts hosted. Upload a release binary to offer one-click updates.
+              No binaries cached yet. Use “Check for updates” to sync the latest release.
             </p>
           ) : (
             <ul className="flex flex-col gap-2">
@@ -359,7 +289,14 @@ export function AgentsPage() {
                         <span className="flex items-center gap-1">
                           <StatusCell agent={agent} />
                           {agent.outdated && (
-                            <span className="text-xs font-medium text-warning" title="Agent version is outdated">•</span>
+                            <Link
+                              className="text-xs font-medium text-warning hover:underline"
+                              title="Agent version is outdated — open to update"
+                              to={`/agents/${encodeURIComponent(agent.id)}`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              outdated
+                            </Link>
                           )}
                         </span>
                       </td>

@@ -319,6 +319,12 @@ type requestUpdateRequest struct {
 	ArtifactID string `json:"artifact_id" validate:"required,max=128"`
 }
 
+type checkUpdatesResponse struct {
+	CheckedAt string            `json:"checked_at"`
+	Cached    []artifactSummary `json:"cached"`
+	UpToDate  bool              `json:"up_to_date"`
+}
+
 type updateReportRequest struct {
 	Status  string `json:"status" validate:"required,max=32"`
 	Version string `json:"version" validate:"required,max=64"`

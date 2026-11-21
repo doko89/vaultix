@@ -104,6 +104,12 @@ export interface AgentUpdateInfo {
   pending: AgentUpdateSlot | null;
 }
 
+export interface UpdateCheckResult {
+  checked_at: string;
+  cached: AgentArtifact[];
+  up_to_date: boolean;
+}
+
 /** DESIGN section 5 groups for the resources browser. */
 export type ResourceGroup = "host" | "container" | "volume" | "database" | "stack" | "other";
 

@@ -4,23 +4,20 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/vaultix/vaultix/internal/domain"
 	agentuc "github.com/vaultix/vaultix/internal/usecase/agent"
-	updateuc "github.com/vaultix/vaultix/internal/usecase/agentupdate"
 )
-
-// uploadReadCap bounds the multipart upload body: one artifact plus
-// multipart framing slack.
-const uploadReadCap = int64(updateuc.MaxArtifactBytes) + (1 << 20)
 
 // artifactIOTimeout bounds artifact byte transfers (DB bytea reads/writes
 // of tens of MB exceed the repo's 5s default).
 const artifactIOTimeout = 2 * time.Minute
+
+// checkTimeout bounds a full release sync (metadata + binary downloads).
+const checkTimeout = 10 * time.Minute
 
 func toArtifactSummary(a domain.AgentArtifact) artifactSummary {
 	return artifactSummary{
@@ -60,38 +57,30 @@ func (h *handler) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, listArtifactsResponse{Items: out})
 }
 
-// handleUploadArtifact stores one agent binary release.
-// POST /api/agents/updates/artifacts (multipart: version, goos, goarch, binary)
-func (h *handler) handleUploadArtifact(w http.ResponseWriter, r *http.Request) {
+// handleCheckUpdates syncs the latest release's agent binaries into the
+// manager cache and reports what is new.
+// POST /api/agents/updates/check
+func (h *handler) handleCheckUpdates(w http.ResponseWriter, r *http.Request) {
 	if !requireUpdates(h) {
 		h.writeError(w, r, errNotConfigured)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, uploadReadCap)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		h.writeError(w, r, fmt.Errorf("%w: parse upload form: %v", domain.ErrValidation, err))
-		return
-	}
-	file, _, err := r.FormFile("binary")
-	if err != nil {
-		h.writeError(w, r, fmt.Errorf("%w: form field binary is required", domain.ErrValidation))
-		return
-	}
-	defer func() { _ = file.Close() }()
-	data, err := io.ReadAll(io.LimitReader(file, uploadReadCap))
-	if err != nil {
-		h.writeError(w, r, fmt.Errorf("%w: read upload: %v", domain.ErrValidation, err))
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), artifactIOTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), checkTimeout)
 	defer cancel()
-	art, err := h.updates.UploadArtifact(ctx,
-		r.FormValue("version"), r.FormValue("goos"), r.FormValue("goarch"), data, "")
+	status, err := h.updates.SyncReleases(ctx)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toArtifactSummary(*art))
+	cached := make([]artifactSummary, 0, len(status.Cached))
+	for _, a := range status.Cached {
+		cached = append(cached, toArtifactSummary(a))
+	}
+	writeJSON(w, http.StatusOK, checkUpdatesResponse{
+		CheckedAt: status.At.UTC().Format(time.RFC3339),
+		Cached:    cached,
+		UpToDate:  len(cached) == 0,
+	})
 }
 
 // handleDeleteArtifact removes one hosted binary.

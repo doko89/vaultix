@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/vaultix/vaultix/internal/adapter/crypto"
+	"github.com/vaultix/vaultix/internal/adapter/ghrelease"
 	adapterhttp "github.com/vaultix/vaultix/internal/adapter/http"
 	agentshttp "github.com/vaultix/vaultix/internal/adapter/http/agents"
 	apikeyshttp "github.com/vaultix/vaultix/internal/adapter/http/apikeys"
@@ -262,7 +263,7 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger,
 
 	heartbeatTimeout := time.Duration(cfg.HeartbeatTimeoutSecs) * time.Second
 	agentSvc, err := agentuc.NewService(repos.Agents, repos.Policies, domain.SystemClock{},
-		agentuc.WithHeartbeatTimeout(heartbeatTimeout))
+		agentuc.WithHeartbeatTimeout(heartbeatTimeout), agentuc.WithUpdateRepo(repos.Updates))
 	if err != nil {
 		return nil, fmt.Errorf("agent service: %w", err)
 	}
@@ -270,7 +271,8 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger,
 	if err != nil {
 		return nil, fmt.Errorf("discovery service: %w", err)
 	}
-	updateSvc, err := updateuc.NewService(repos.Updates, repos.Agents)
+	updateSvc, err := updateuc.NewService(repos.Updates, repos.Agents,
+		updateuc.WithReleaseSource(ghrelease.NewClient(cfg.UpdateAPIOrDefault(), cfg.UpdateRepoOrDefault())))
 	if err != nil {
 		return nil, fmt.Errorf("agent update service: %w", err)
 	}
@@ -340,6 +342,9 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger,
 
 	go runSessionJanitor(ctx, log, sessions, cfg.JanitorInterval())
 	go runDispatcher(ctx, log, scheduleSvc, runner, gate, notifSvc, cfg.DispatchInterval())
+	if interval := cfg.UpdateCheckInterval(); interval > 0 {
+		go runUpdateChecker(ctx, log, updateSvc, interval)
+	}
 
 	keys := keyIssuerFor(repos, storageBox, auditSvc, log)
 	dataPlane := &agentDataPlane{
@@ -498,6 +503,36 @@ func smtpConfig(c SMTPConfig) notificationuc.SMTPConfig {
 }
 
 // runSessionJanitor periodically deletes expired sessions.
+// runUpdateChecker syncs release agent binaries on boot and every tick.
+// Sync failures log and retry next tick; the UI check button syncs now.
+func runUpdateChecker(ctx context.Context, log *slog.Logger, updates *updateuc.Service, interval time.Duration) {
+	syncOnce := func() {
+		status, err := updates.SyncReleases(ctx)
+		if err != nil {
+			log.Warn("agent update sync failed", "error", err)
+			return
+		}
+		if len(status.Cached) > 0 {
+			versions := make([]string, 0, len(status.Cached))
+			for _, a := range status.Cached {
+				versions = append(versions, a.Version+"/"+a.GOOS+"/"+a.GOARCH)
+			}
+			log.Info("agent update sync cached binaries", "artifacts", versions)
+		}
+	}
+	syncOnce()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			syncOnce()
+		}
+	}
+}
+
 func runSessionJanitor(ctx context.Context, log *slog.Logger, sessions *session.Store, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()

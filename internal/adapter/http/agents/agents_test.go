@@ -1,13 +1,11 @@
 package agents
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -213,17 +211,11 @@ func newFakeUpdates() *fakeUpdates {
 	return &fakeUpdates{artifacts: map[string]*domain.AgentArtifact{}, slots: map[string]*domain.AgentUpdate{}}
 }
 
-func (f *fakeUpdates) UploadArtifact(_ context.Context, version, goos, goarch string, data []byte, _ string) (*domain.AgentArtifact, error) {
+func (f *fakeUpdates) SyncReleases(_ context.Context) (*updateuc.SyncStatus, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	a := &domain.AgentArtifact{
-		ID: "art-1", Version: version, GOOS: goos, GOARCH: goarch,
-		SHA256: []byte{1, 2, 3}, SizeBytes: int64(len(data)),
-	}
-	f.artifacts[a.ID] = a
-	cp := *a
-	return &cp, nil
+	return &updateuc.SyncStatus{}, nil
 }
 
 func (f *fakeUpdates) ListArtifacts(_ context.Context) ([]domain.AgentArtifact, error) {
@@ -498,7 +490,7 @@ func TestMountRegistersRoutes(t *testing.T) {
 		{"GET", "/api/agents/:id/policies", nil},
 		{"GET", "/api/agents/:id/resources", nil},
 		{"GET", "/api/agents/updates/artifacts", nil},
-		{"POST", "/api/agents/updates/artifacts", nil},
+		{"POST", "/api/agents/updates/check", nil},
 		{"DELETE", "/api/agents/updates/artifacts/:id", nil},
 		{"GET", "/api/agents/:id/update", nil},
 		{"POST", "/api/agents/:id/update", nil},
@@ -911,38 +903,11 @@ func TestInternalErrorMapping(t *testing.T) {
 	}
 }
 
-func doMultipart(t *testing.T, h http.HandlerFunc, target string, fields map[string]string, fileField, fileName string, fileBytes []byte) *httptest.ResponseRecorder {
-	t.Helper()
-	var buf bytes.Buffer
-	w := multipart.NewWriter(&buf)
-	for k, v := range fields {
-		if err := w.WriteField(k, v); err != nil {
-			t.Fatalf("write field: %v", err)
-		}
-	}
-	if fileField != "" {
-		fw, err := w.CreateFormFile(fileField, fileName)
-		if err != nil {
-			t.Fatalf("create file: %v", err)
-		}
-		if _, err := fw.Write(fileBytes); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodPost, target, &buf)
-	req.Header.Set("Content-Type", w.FormDataContentType())
-	rec := httptest.NewRecorder()
-	h(rec, req)
-	return rec
-}
-
 func TestUpdateUnwired501(t *testing.T) {
 	r, _, _, _ := testRouter() // no Updates wired
 	cases := []struct{ method, pattern, target, body string }{
 		{"GET", "/api/agents/updates/artifacts", "/api/agents/updates/artifacts", ""},
+		{"POST", "/api/agents/updates/check", "/api/agents/updates/check", ""},
 		{"DELETE", "/api/agents/updates/artifacts/:id", "/api/agents/updates/artifacts/art-1", ""},
 		{"GET", "/api/agents/:id/update", "/api/agents/ag-1/update", ""},
 		{"POST", "/api/agents/:id/update", "/api/agents/ag-1/update", `{"artifact_id":"art-1"}`},
@@ -955,31 +920,23 @@ func TestUpdateUnwired501(t *testing.T) {
 			t.Fatalf("%s %s unwired: want 501, got %d", c.method, c.pattern, rec.Code)
 		}
 	}
-	up := r.find("POST", "/api/agents/updates/artifacts")
-	rec := doMultipart(t, up, "/api/agents/updates/artifacts",
-		map[string]string{"version": "v2", "goos": "linux", "goarch": "amd64"}, "binary", "agent", []byte("x"))
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("upload unwired: want 501, got %d", rec.Code)
-	}
 }
 
 func TestUpdateArtifactsUI(t *testing.T) {
-	r, _, _ := testRouterWithUpdates()
-	upload := r.find("POST", "/api/agents/updates/artifacts")
-	rec := doMultipart(t, upload, "/api/agents/updates/artifacts",
-		map[string]string{"version": "v2.0.0", "goos": "linux", "goarch": "amd64"}, "binary", "agent", []byte("fake-bytes"))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("upload: want 201, got %d (%s)", rec.Code, rec.Body.String())
+	r, _, updates := testRouterWithUpdates()
+	updates.artifacts["art-1"] = &domain.AgentArtifact{
+		ID: "art-1", Version: "v2.0.0", GOOS: "linux", GOARCH: "amd64",
+		SHA256: []byte{1, 2, 3}, SizeBytes: 10,
 	}
-	var created artifactSummary
-	decodeBody(t, rec, &created)
-	if created.Version != "v2.0.0" || created.SHA256 == "" || created.SizeBytes != 10 {
-		t.Fatalf("upload body: %+v", created)
+	check := r.find("POST", "/api/agents/updates/check")
+	rec := do(t, check, "POST", "/api/agents/updates/check", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("check: want 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
-	rec = doMultipart(t, upload, "/api/agents/updates/artifacts",
-		map[string]string{"version": "v2.0.0", "goos": "linux", "goarch": "amd64"}, "", "", nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("missing binary: want 400, got %d", rec.Code)
+	var checked checkUpdatesResponse
+	decodeBody(t, rec, &checked)
+	if !checked.UpToDate {
+		t.Fatalf("check body: %+v", checked)
 	}
 	list := r.find("GET", "/api/agents/updates/artifacts")
 	rec = do(t, list, "GET", "/api/agents/updates/artifacts", "", "")

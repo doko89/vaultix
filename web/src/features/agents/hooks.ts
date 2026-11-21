@@ -3,6 +3,7 @@ import type { ID } from "@/shared/types";
 import { errorText } from "@/shared/lib/api";
 import { useToasts } from "@/shared/ui/toast";
 import {
+  checkUpdates,
   deleteAgent,
   deleteArtifact,
   describeUpdate,
@@ -15,7 +16,6 @@ import {
   requestUpdate,
   revokeAgent,
   setAgentDisabled,
-  uploadArtifact,
 } from "./api";
 import type { AgentFilters } from "./api";
 
@@ -116,18 +116,21 @@ export function useArtifacts() {
   });
 }
 
-export function useUploadArtifact(onDone: () => void) {
+export function useCheckUpdates() {
   const queryClient = useQueryClient();
   const { push } = useToasts();
   return useMutation({
-    mutationFn: ({ version, goos, goarch, binary }: { version: string; goos: string; goarch: string; binary: File }) =>
-      uploadArtifact(version, goos, goarch, binary),
-    onSuccess: (art) => {
-      push({ tone: "success", title: `Artifact ${art.version} (${art.goos}/${art.goarch}) uploaded` });
+    mutationFn: () => checkUpdates(),
+    onSuccess: (res) => {
+      if (res.up_to_date) {
+        push({ tone: "success", title: "Agent binaries are up to date" });
+      } else {
+        const names = res.cached.map((a) => `${a.version} (${a.goos}/${a.goarch})`).join(", ");
+        push({ tone: "success", title: `Cached new binaries: ${names}` });
+      }
       void queryClient.invalidateQueries({ queryKey: [...AGENTS_KEY] });
-      onDone();
     },
-    onError: (err) => push({ tone: "error", title: "Could not upload artifact", message: errorText(err) }),
+    onError: (err) => push({ tone: "error", title: "Could not check for updates", message: errorText(err) }),
   });
 }
 

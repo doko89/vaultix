@@ -24,6 +24,7 @@ const (
 type Service struct {
 	agents           domain.AgentRepository
 	policies         domain.PolicyRepository
+	updates          domain.AgentUpdateRepository
 	clock            domain.Clock
 	minVersion       string
 	heartbeatTimeout time.Duration
@@ -38,6 +39,13 @@ type Option func(*Service)
 // an older (or empty) version are flagged outdated. Empty disables the flag.
 func WithMinVersion(v string) Option {
 	return func(s *Service) { s.minVersion = strings.TrimSpace(v) }
+}
+
+// WithUpdateRepo points outdated detection at the cached agent binaries:
+// an agent older than the newest cached build for its platform is
+// outdated. Nil (default) keeps the minVersion comparison.
+func WithUpdateRepo(r domain.AgentUpdateRepository) Option {
+	return func(s *Service) { s.updates = r }
 }
 
 // WithHeartbeatTimeout overrides domain.DefaultHeartbeatTimeout for presence

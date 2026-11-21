@@ -105,7 +105,7 @@ func MountUI(r Router, deps Deps) {
 	r.Get("/api/agents/:id/policies", h.handleAgentPolicies)
 	r.Get("/api/agents/:id/resources", h.handleAgentResources)
 	r.Get("/api/agents/updates/artifacts", h.handleListArtifacts)
-	r.Post("/api/agents/updates/artifacts", h.handleUploadArtifact)
+	r.Post("/api/agents/updates/check", h.handleCheckUpdates)
 	r.Delete("/api/agents/updates/artifacts/:id", h.handleDeleteArtifact)
 	r.Get("/api/agents/:id/update", h.handleDescribeUpdate)
 	r.Post("/api/agents/:id/update", h.handleRequestUpdate)

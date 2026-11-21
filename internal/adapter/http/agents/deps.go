@@ -245,9 +245,9 @@ type DiscoveryService interface {
 // needs. It is optional like Grants/Restores: nil answers 501 on the
 // update endpoints and omits the poll directive.
 type UpdateService interface {
-	UploadArtifact(ctx context.Context, version, goos, goarch string, data []byte, by string) (*domain.AgentArtifact, error)
 	ListArtifacts(ctx context.Context) ([]domain.AgentArtifact, error)
 	DeleteArtifact(ctx context.Context, id string) error
+	SyncReleases(ctx context.Context) (*updateuc.SyncStatus, error)
 	RequestUpdate(ctx context.Context, agentID, artifactID, by string) (*domain.AgentUpdate, error)
 	PendingDirective(ctx context.Context, agentID string) (*updateuc.Directive, error)
 	DownloadArtifact(ctx context.Context, agentID string) (*domain.AgentArtifact, error)

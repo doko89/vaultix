@@ -642,6 +642,119 @@ func TestOutdatedFlag(t *testing.T) {
 	}
 }
 
+type fakeUpdateRepo struct {
+	artifacts []domain.AgentArtifact
+	err       error
+}
+
+func (f *fakeUpdateRepo) CreateArtifact(_ context.Context, a *domain.AgentArtifact) error {
+	f.artifacts = append(f.artifacts, *a)
+	return nil
+}
+
+func (f *fakeUpdateRepo) ListArtifacts(_ context.Context) ([]domain.AgentArtifact, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]domain.AgentArtifact(nil), f.artifacts...), nil
+}
+
+func (f *fakeUpdateRepo) ListPlatformArtifacts(_ context.Context, goos, goarch string) ([]domain.AgentArtifact, error) {
+	var out []domain.AgentArtifact
+	for _, a := range f.artifacts {
+		if a.GOOS == goos && a.GOARCH == goarch {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeUpdateRepo) GetArtifact(_ context.Context, id string) (*domain.AgentArtifact, error) {
+	for _, a := range f.artifacts {
+		if a.ID == id {
+			cp := a
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (f *fakeUpdateRepo) DeleteArtifact(_ context.Context, id string) error {
+	for i, a := range f.artifacts {
+		if a.ID == id {
+			f.artifacts = append(f.artifacts[:i], f.artifacts[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakeUpdateRepo) UpsertUpdate(_ context.Context, agentID, targetVersion, goos, goarch, requestedBy string) (*domain.AgentUpdate, error) {
+	return &domain.AgentUpdate{AgentID: agentID, TargetVersion: targetVersion, GOOS: goos, GOARCH: goarch, RequestedBy: requestedBy}, nil
+}
+
+func (f *fakeUpdateRepo) GetUpdate(_ context.Context, _ string) (*domain.AgentUpdate, error) {
+	return nil, domain.ErrNotFound
+}
+
+func (f *fakeUpdateRepo) SetUpdateStatus(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func TestOutdatedAgainstCache(t *testing.T) {
+	ctx := context.Background()
+	agents := newFakeAgentRepo()
+	updates := &fakeUpdateRepo{artifacts: []domain.AgentArtifact{
+		{ID: "a1", Version: "v2.0.0", GOOS: "linux", GOARCH: "amd64"},
+		{ID: "a2", Version: "v1.5.0", GOOS: "linux", GOARCH: "arm64"},
+	}}
+	svc, err := NewService(agents, &fakePolicyRepo{}, nil, WithUpdateRepo(updates))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	old := &domain.Agent{ID: "ag-old", Hostname: "vm-old", OS: "linux", Architecture: "amd64", Version: "v1.0.0"}
+	cur := &domain.Agent{ID: "ag-cur", Hostname: "vm-cur", OS: "linux", Architecture: "amd64", Version: "v2.0.0"}
+	arm := &domain.Agent{ID: "ag-arm", Hostname: "vm-arm", OS: "linux", Architecture: "arm64", Version: "v1.0.0"}
+	legacy := &domain.Agent{ID: "ag-legacy", Hostname: "vm-legacy", Version: "v1.0.0"}
+	revoked := &domain.Agent{ID: "ag-rev", Hostname: "vm-rev", OS: "linux", Architecture: "amd64", Version: "v1.0.0", Disabled: true}
+	for _, a := range []*domain.Agent{old, cur, arm, legacy, revoked} {
+		if err := agents.CreateAgent(ctx, a); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	for id, want := range map[string]bool{"ag-old": true, "ag-cur": false, "ag-arm": true, "ag-legacy": true, "ag-rev": false} {
+		view, err := svc.GetAgent(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if view.Outdated != want {
+			t.Fatalf("%s outdated=%v, want %v", id, view.Outdated, want)
+		}
+	}
+	// Listings flag the same rows.
+	listed, err := svc.ListAgents(ctx, domain.ListOptions{}, AgentFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, v := range listed.Items {
+		if v.Agent.ID == "ag-old" && !v.Outdated {
+			t.Fatal("list must flag ag-old")
+		}
+		if v.Agent.ID == "ag-cur" && v.Outdated {
+			t.Fatal("list must not flag ag-cur")
+		}
+	}
+	// Lookup failure falls back to the (empty) minimum: nothing flags.
+	updates.err = errors.New("boom")
+	view, err := svc.GetAgent(ctx, "ag-old")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if view.Outdated {
+		t.Fatal("lookup failure must fall back, not flag")
+	}
+}
+
 func TestListAgentsFilter(t *testing.T) {
 	svc, _, _, clock := testSetup()
 	ctx := context.Background()

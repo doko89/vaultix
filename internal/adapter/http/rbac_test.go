@@ -90,8 +90,8 @@ func (matrixAgents) ListAgents(_ context.Context, _ domain.ListOptions, _ agentu
 func (matrixAgents) RevokeAgent(_ context.Context, _ string) error         { return nil }
 func (matrixAgents) SetDisabled(_ context.Context, _ string, _ bool) error { return nil }
 func (matrixAgents) DeleteAgent(_ context.Context, _ string) error         { return nil }
-func (matrixAgents) UploadArtifact(_ context.Context, _, _, _ string, _ []byte, _ string) (*domain.AgentArtifact, error) {
-	return &domain.AgentArtifact{ID: "art-1"}, nil
+func (matrixAgents) SyncReleases(_ context.Context) (*updateuc.SyncStatus, error) {
+	return &updateuc.SyncStatus{}, nil
 }
 func (matrixAgents) ListArtifacts(_ context.Context) ([]domain.AgentArtifact, error) {
 	return nil, nil
@@ -286,7 +286,7 @@ func TestUIRoleRulesTable(t *testing.T) {
 		"PATCH /api/agents/:id":                      admin,
 		"POST /api/agents/:id/revoke":                admin,
 		"DELETE /api/agents/:id":                     admin,
-		"POST /api/agents/updates/artifacts":         admin,
+		"POST /api/agents/updates/check":             admin,
 		"DELETE /api/agents/updates/artifacts/:id":   admin,
 		"POST /api/agents/:id/update":                admin,
 		"POST /api/restore/plan":                     op,
