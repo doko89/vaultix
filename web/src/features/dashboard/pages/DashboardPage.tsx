@@ -12,7 +12,7 @@ import type { Dashboard, DayPoint } from "../types";
 function TrendChart({ trend }: { trend: DayPoint[] }) {
   const max = Math.max(1, ...trend.map((d) => d.succeeded + d.failed));
   return (
-    <div className="flex h-28 items-end gap-1" role="img" aria-label="Jobs per day for the last two weeks">
+    <div className="flex min-h-28 flex-1 items-end gap-1" role="img" aria-label="Jobs per day for the last two weeks">
       {trend.map((d) => {
         const total = d.succeeded + d.failed;
         const heightPct = Math.max(total === 0 ? 2 : (total / max) * 100, 2);
@@ -57,7 +57,7 @@ function LoadedDashboard({ dashboard }: { dashboard: Dashboard }) {
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <Card>
+        <Card className="flex flex-col">
           <CardHeader>
             <CardTitle>Recent jobs</CardTitle>
           </CardHeader>
@@ -84,11 +84,11 @@ function LoadedDashboard({ dashboard }: { dashboard: Dashboard }) {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="flex flex-col">
           <CardHeader>
             <CardTitle>Backup trends (14 days)</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-1 flex-col">
             {dashboard.trend.length === 0 ? (
               <p className="text-sm text-gray-500">No trend data yet.</p>
             ) : (
