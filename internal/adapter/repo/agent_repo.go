@@ -144,6 +144,26 @@ func (r *AgentRepo) UpdateAgent(ctx context.Context, a *domain.Agent) error {
 	return nil
 }
 
+// DeleteAgent removes the agent row. Credentials, heartbeats, and discovery
+// rows cascade; jobs, snapshots, and policy targets keep their history with
+// agent_id nulled (schema ON DELETE actions).
+func (r *AgentRepo) DeleteAgent(ctx context.Context, id string) error {
+	aid, err := mustParseUUID(id, "agent id")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	n, err := r.q.DeleteAgent(ctx, gen.DeleteAgentParams{ID: aid})
+	if err != nil {
+		return mapErr(err)
+	}
+	if n == 0 {
+		return notFound("agent")
+	}
+	return nil
+}
+
 // ListAgents returns one page of agents filtered by hostname/name.
 func (r *AgentRepo) ListAgents(ctx context.Context, opts domain.ListOptions) (domain.ListResult[domain.Agent], error) {
 	limit, offset := page(opts)

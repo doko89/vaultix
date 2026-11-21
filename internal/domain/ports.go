@@ -67,6 +67,7 @@ type AgentRepository interface {
 	CreateAgent(ctx context.Context, a *Agent) error
 	GetAgent(ctx context.Context, id string) (*Agent, error)
 	UpdateAgent(ctx context.Context, a *Agent) error
+	DeleteAgent(ctx context.Context, id string) error
 	ListAgents(ctx context.Context, opts ListOptions) (ListResult[Agent], error)
 
 	StoreCredential(ctx context.Context, c *AgentCredential) error

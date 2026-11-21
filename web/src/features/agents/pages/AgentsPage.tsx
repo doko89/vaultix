@@ -20,6 +20,7 @@ import {
   useAgent,
   useAgentPolicies,
   useAgents,
+  useDeleteAgent,
   useIssueEnrollToken,
   useRevokeAgent,
   useSetAgentDisabled,
@@ -134,7 +135,8 @@ function AgentDetail({ agentId, onClose }: { agentId: ID; onClose: () => void })
   const policies = useAgentPolicies(agentId);
   const setDisabled = useSetAgentDisabled();
   const revoke = useRevokeAgent();
-  const [confirm, setConfirm] = useState<"disable" | "enable" | "revoke" | null>(null);
+  const remove = useDeleteAgent(onClose);
+  const [confirm, setConfirm] = useState<"disable" | "enable" | "revoke" | "delete" | null>(null);
 
   const agent = detail.data;
   const diskUsed =
@@ -252,6 +254,11 @@ function AgentDetail({ agentId, onClose }: { agentId: ID; onClose: () => void })
                   Revoke
                 </Button>
               )}
+              {agent.status === "revoked" && (
+                <Button type="button" variant="destructive" size="sm" onClick={() => setConfirm("delete")}>
+                  Delete
+                </Button>
+              )}
             </div>
           </div>
         )}
@@ -287,6 +294,18 @@ function AgentDetail({ agentId, onClose }: { agentId: ID; onClose: () => void })
         busy={revoke.isPending}
         onConfirm={() => {
           revoke.mutate(agentId, { onSuccess: () => setConfirm(null) });
+        }}
+        onClose={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === "delete"}
+        title="Delete agent?"
+        body="The agent row is permanently removed. Job and snapshot history is kept but no longer linked to this agent."
+        confirmLabel="Delete agent"
+        requireName={agent?.hostname}
+        busy={remove.isPending}
+        onConfirm={() => {
+          remove.mutate(agentId);
         }}
         onClose={() => setConfirm(null)}
       />

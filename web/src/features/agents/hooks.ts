@@ -3,6 +3,7 @@ import type { ID } from "@/shared/types";
 import { errorText } from "@/shared/lib/api";
 import { useToasts } from "@/shared/ui/toast";
 import {
+  deleteAgent,
   getAgent,
   issueEnrollToken,
   listAgentPolicies,
@@ -64,6 +65,20 @@ export function useRevokeAgent() {
       void queryClient.invalidateQueries({ queryKey: [...AGENTS_KEY] });
     },
     onError: (err) => push({ tone: "error", title: "Could not revoke agent", message: errorText(err) }),
+  });
+}
+
+export function useDeleteAgent(onDone: () => void) {
+  const queryClient = useQueryClient();
+  const { push } = useToasts();
+  return useMutation({
+    mutationFn: (agentId: ID) => deleteAgent(agentId),
+    onSuccess: () => {
+      push({ tone: "success", title: "Agent deleted" });
+      void queryClient.invalidateQueries({ queryKey: [...AGENTS_KEY] });
+      onDone();
+    },
+    onError: (err) => push({ tone: "error", title: "Could not delete agent", message: errorText(err) }),
   });
 }
 

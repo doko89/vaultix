@@ -118,6 +118,22 @@ func (q *Queries) CreateAgentCredential(ctx context.Context, arg CreateAgentCred
 	return i, err
 }
 
+const deleteAgent = `-- name: DeleteAgent :execrows
+DELETE FROM agents WHERE id = $1
+`
+
+type DeleteAgentParams struct {
+	ID pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) DeleteAgent(ctx context.Context, arg DeleteAgentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAgent, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOldHeartbeats = `-- name: DeleteOldHeartbeats :execrows
 DELETE FROM agent_heartbeats WHERE received_at < $1
 `

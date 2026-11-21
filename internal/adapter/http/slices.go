@@ -162,6 +162,7 @@ func uiRoleRules() []roleRule {
 		{"POST", "/api/agents/enroll-tokens", op},
 		{"PATCH", "/api/agents/:id", admin},
 		{"POST", "/api/agents/:id/revoke", admin},
+		{"DELETE", "/api/agents/:id", admin},
 		// Restore.
 		{"POST", "/api/restore/plan", op},
 		{"POST", "/api/restore/confirm", op},

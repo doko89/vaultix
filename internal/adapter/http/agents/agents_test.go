@@ -161,6 +161,21 @@ func (f *fakeAgents) RevokeAgent(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeAgents) DeleteAgent(_ context.Context, id string) error {
+	if f.err != nil {
+		return f.err
+	}
+	v, ok := f.agents[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	if !v.Agent.Disabled {
+		return errors.Join(domain.ErrConflict, errors.New("only revoked agents can be deleted"))
+	}
+	delete(f.agents, id)
+	return nil
+}
+
 func (f *fakeAgents) SetDisabled(_ context.Context, id string, disabled bool) error {
 	if f.err != nil {
 		return f.err
@@ -337,6 +352,7 @@ func TestMountRegistersRoutes(t *testing.T) {
 		{"GET", "/api/agents/:id", nil},
 		{"PATCH", "/api/agents/:id", nil},
 		{"POST", "/api/agents/:id/revoke", nil},
+		{"DELETE", "/api/agents/:id", nil},
 		{"GET", "/api/agents/:id/policies", nil},
 		{"GET", "/api/agents/:id/resources", nil},
 		{"POST", "/api/agent/enroll", nil},
@@ -658,6 +674,31 @@ func TestUIPatchRevoke(t *testing.T) {
 	}
 	if rec := do(t, revoke, "POST", "/api/agents/missing/revoke", "", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing revoke: want 404, got %d", rec.Code)
+	}
+}
+
+func TestUIDelete(t *testing.T) {
+	r, agents, _, _ := testRouter()
+	del := r.find("DELETE", "/api/agents/:id")
+	if rec := do(t, del, "DELETE", "/api/agents/missing", "", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing: want 404, got %d", rec.Code)
+	}
+	if rec := do(t, del, "DELETE", "/api/agents/ag-1", "", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("non-revoked: want 409, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	revoke := r.find("POST", "/api/agents/:id/revoke")
+	if rec := do(t, revoke, "POST", "/api/agents/ag-1/revoke", "", ""); rec.Code != http.StatusOK {
+		t.Fatalf("revoke: want 200, got %d", rec.Code)
+	}
+	if rec := do(t, del, "DELETE", "/api/agents/ag-1", "", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: want 204, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if _, ok := agents.agents["ag-1"]; ok {
+		t.Fatal("agent row still present after delete")
+	}
+	get := r.find("GET", "/api/agents/:id")
+	if rec := do(t, get, "GET", "/api/agents/ag-1", "", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("get after delete: want 404, got %d", rec.Code)
 	}
 }
 

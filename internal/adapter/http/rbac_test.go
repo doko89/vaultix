@@ -88,6 +88,7 @@ func (matrixAgents) ListAgents(_ context.Context, _ domain.ListOptions, _ agentu
 }
 func (matrixAgents) RevokeAgent(_ context.Context, _ string) error         { return nil }
 func (matrixAgents) SetDisabled(_ context.Context, _ string, _ bool) error { return nil }
+func (matrixAgents) DeleteAgent(_ context.Context, _ string) error         { return nil }
 func (matrixAgents) AgentPolicies(_ context.Context, _ string) ([]agentuc.PolicySummary, error) {
 	return nil, nil
 }
@@ -214,6 +215,7 @@ func TestRBACMatrix(t *testing.T) {
 	for _, w := range []struct{ method, target, body string }{
 		{"PATCH", "/api/agents/ag-1", `{"disabled":true}`},
 		{"POST", "/api/agents/ag-1/revoke", ""},
+		{"DELETE", "/api/agents/ag-1", ""},
 	} {
 		rec := matrixDo(t, mux, w.method, w.target, w.body, "tok-op")
 		require.Equal(t, http.StatusForbidden, rec.Code, "%s %s operator -> 403", w.method, w.target)
@@ -260,6 +262,7 @@ func TestUIRoleRulesTable(t *testing.T) {
 		"POST /api/agents/enroll-tokens":             op,
 		"PATCH /api/agents/:id":                      admin,
 		"POST /api/agents/:id/revoke":                admin,
+		"DELETE /api/agents/:id":                     admin,
 		"POST /api/restore/plan":                     op,
 		"POST /api/restore/confirm":                  op,
 		"POST /api/restore/execute":                  op,

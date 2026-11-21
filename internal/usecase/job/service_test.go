@@ -155,6 +155,16 @@ func (f *fakeAgents) UpdateAgent(_ context.Context, a *domain.Agent) error {
 	return nil
 }
 
+func (f *fakeAgents) DeleteAgent(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.agents[id]; !ok {
+		return fmt.Errorf("fake: agent %s: %w", id, domain.ErrNotFound)
+	}
+	delete(f.agents, id)
+	return nil
+}
+
 func (f *fakeAgents) ListAgents(_ context.Context, _ domain.ListOptions) (domain.ListResult[domain.Agent], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

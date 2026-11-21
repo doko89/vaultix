@@ -99,6 +99,7 @@ func (f *memAgents) GetAgent(_ context.Context, id string) (*domain.Agent, error
 	return a, nil
 }
 func (f *memAgents) UpdateAgent(_ context.Context, _ *domain.Agent) error { return nil }
+func (f *memAgents) DeleteAgent(_ context.Context, _ string) error        { return nil }
 func (f *memAgents) ListAgents(_ context.Context, _ domain.ListOptions) (domain.ListResult[domain.Agent], error) {
 	return domain.ListResult[domain.Agent]{}, nil
 }

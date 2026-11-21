@@ -78,6 +78,16 @@ func (f *fakeAgentRepo) UpdateAgent(_ context.Context, a *domain.Agent) error {
 	return nil
 }
 
+func (f *fakeAgentRepo) DeleteAgent(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.agents[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(f.agents, id)
+	return nil
+}
+
 func (f *fakeAgentRepo) ListAgents(_ context.Context, opts domain.ListOptions) (domain.ListResult[domain.Agent], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -499,6 +509,30 @@ func TestRevokeDeniesAuth(t *testing.T) {
 	}
 	if _, err := svc.AuthenticateAgent(ctx, token2); err != nil {
 		t.Fatalf("auth after re-enable: %v", err)
+	}
+}
+
+func TestDeleteRequiresRevoked(t *testing.T) {
+	svc, _, _, _ := testSetup()
+	ctx := context.Background()
+	if err := svc.DeleteAgent(ctx, ""); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("empty id: want ErrValidation, got %v", err)
+	}
+	if err := svc.DeleteAgent(ctx, "missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing: want ErrNotFound, got %v", err)
+	}
+	ag, _ := enroll(t, svc)
+	if err := svc.DeleteAgent(ctx, ag.ID); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("active agent: want ErrConflict, got %v", err)
+	}
+	if err := svc.RevokeAgent(ctx, ag.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if err := svc.DeleteAgent(ctx, ag.ID); err != nil {
+		t.Fatalf("delete revoked: %v", err)
+	}
+	if _, err := svc.GetAgent(ctx, ag.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("get after delete: want ErrNotFound, got %v", err)
 	}
 }
 

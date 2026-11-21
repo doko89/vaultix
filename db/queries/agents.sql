@@ -126,3 +126,6 @@ RETURNING *;
 UPDATE agents
 SET metadata = coalesce(metadata, '{}'::jsonb) || $2::jsonb, updated_at = now()
 WHERE id = $1;
+
+-- name: DeleteAgent :execrows
+DELETE FROM agents WHERE id = $1;

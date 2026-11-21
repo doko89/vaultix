@@ -37,6 +37,10 @@ export function revokeAgent(agentId: ID): Promise<Agent> {
   return api.post<Agent>(`/agents/${encodeURIComponent(agentId)}/revoke`);
 }
 
+export function deleteAgent(agentId: ID): Promise<void> {
+  return api.delete<void>(`/agents/${encodeURIComponent(agentId)}`);
+}
+
 export function listAgentPolicies(agentId: ID): Promise<AgentPolicies> {
   return api.get<AgentPolicies>(`/agents/${encodeURIComponent(agentId)}/policies`);
 }

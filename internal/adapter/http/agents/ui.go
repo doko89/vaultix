@@ -132,6 +132,21 @@ func (h *handler) handleRevokeAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toSummary(*view))
 }
 
+// handleDeleteAgent permanently removes a revoked agent.
+// DELETE /api/agents/:id
+func (h *handler) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	id, err := requireAgentID(r)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	if err := h.agents.DeleteAgent(r.Context(), id); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleAgentPolicies inspects policy assignments for an agent.
 // GET /api/agents/:id/policies
 func (h *handler) handleAgentPolicies(w http.ResponseWriter, r *http.Request) {

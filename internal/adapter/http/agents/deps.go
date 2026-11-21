@@ -229,6 +229,7 @@ type AgentService interface {
 	ListAgents(ctx context.Context, opts domain.ListOptions, filter agentuc.AgentFilter) (*agentuc.AgentListResult, error)
 	RevokeAgent(ctx context.Context, id string) error
 	SetDisabled(ctx context.Context, id string, disabled bool) error
+	DeleteAgent(ctx context.Context, id string) error
 	AgentPolicies(ctx context.Context, agentID string) ([]agentuc.PolicySummary, error)
 	AuthenticateAgent(ctx context.Context, bearer string) (*domain.AgentCredential, error)
 }

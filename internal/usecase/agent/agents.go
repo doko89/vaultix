@@ -132,6 +132,26 @@ func (s *Service) SetDisabled(ctx context.Context, id string, disabled bool) err
 	return nil
 }
 
+// DeleteAgent permanently removes a revoked (disabled) agent. Non-revoked
+// agents are refused so deletion is always a deliberate two-step flow:
+// revoke first (cut access), then delete (drop the row).
+func (s *Service) DeleteAgent(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("%w: agent id is required", domain.ErrValidation)
+	}
+	ag, err := s.agents.GetAgent(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ag.Disabled {
+		return fmt.Errorf("%w: only revoked agents can be deleted; revoke the agent first", domain.ErrConflict)
+	}
+	if err := s.agents.DeleteAgent(ctx, id); err != nil {
+		return fmt.Errorf("agent: delete agent: %w", err)
+	}
+	return nil
+}
+
 // AgentView is an agent plus Manager-derived status and version flag.
 type AgentView struct {
 	Agent    domain.Agent

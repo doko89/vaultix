@@ -97,6 +97,7 @@ func MountUI(r Router, deps Deps) {
 	r.Get("/api/agents/:id", h.handleGetAgent)
 	r.Patch("/api/agents/:id", h.handlePatchAgent)
 	r.Post("/api/agents/:id/revoke", h.handleRevokeAgent)
+	r.Delete("/api/agents/:id", h.handleDeleteAgent)
 	r.Get("/api/agents/:id/policies", h.handleAgentPolicies)
 	r.Get("/api/agents/:id/resources", h.handleAgentResources)
 }
