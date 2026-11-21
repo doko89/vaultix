@@ -89,7 +89,7 @@ export function deleteTarget(policyId: ID, targetId: ID): Promise<PolicyVersion>
 
 // --- Schedules ---
 
-export function listSchedules(policyId: ID): Promise<ScheduleList> {
+export function listSchedules(policyId?: ID): Promise<ScheduleList> {
   return api.get<ScheduleList>(`/schedules${qs({ policy_id: policyId })}`);
 }
 

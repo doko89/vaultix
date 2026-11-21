@@ -76,11 +76,13 @@ const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 function ScheduleDialog({
   open,
   policyId,
+  policies,
   schedule,
   onClose,
 }: {
   open: boolean;
-  policyId: ID;
+  policyId: string;
+  policies: { id: ID; name: string }[];
   schedule?: Schedule | undefined;
   onClose: () => void;
 }) {
@@ -120,7 +122,7 @@ function ScheduleDialog({
   function submit(): void {
     setShowErrors(true);
     if (validateSchedule(form).length > 0) return;
-    const input: ScheduleInput = { ...form, policy_id: schedule === undefined ? policyId : form.policy_id };
+    const input: ScheduleInput = { ...form };
     // Strip fields irrelevant to the kind so the server sees a clean shape.
     if (input.kind !== "one_time") delete input.run_at;
     if (input.kind !== "hourly") delete input.interval_hours;
@@ -142,6 +144,21 @@ function ScheduleDialog({
       onClose={onClose}
     >
       <div className="flex flex-col gap-3">
+        <div>
+          <label className="mb-1 block text-sm font-medium">Policy</label>
+          <Select
+            value={form.policy_id}
+            onChange={(e) => patch({ policy_id: e.target.value })}
+            disabled={schedule !== undefined}
+          >
+            <option value="">Select…</option>
+            {policies.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="mb-1 block text-sm font-medium">Kind</label>
@@ -296,7 +313,8 @@ export function SchedulesPage() {
   const run = useRunSchedule();
   const remove = useDeleteSchedule();
 
-  const effectivePolicy = policyId === "" ? undefined : policyId;
+  const policyName = (id: ID): string =>
+    policies.data?.items.find((p) => p.id === id)?.name ?? id;
 
   return (
     <div className="flex flex-col gap-6">
@@ -304,7 +322,7 @@ export function SchedulesPage() {
         title="Schedules"
         description="Manage one-time and recurring backup schedules."
         action={
-          <Button type="button" disabled={effectivePolicy === undefined} onClick={() => setDialog({ open: true })}>
+          <Button type="button" onClick={() => setDialog({ open: true })}>
             <Plus aria-hidden />
             Create schedule
           </Button>
@@ -312,12 +330,12 @@ export function SchedulesPage() {
       />
       <div className="flex flex-wrap items-center gap-3">
         <Select
-          aria-label="Select policy"
+          aria-label="Filter by policy"
           className="max-w-sm"
           value={policyId}
           onChange={(e) => setPolicyId(e.target.value)}
         >
-          <option value="">Select a policy…</option>
+          <option value="">All policies</option>
           {(policies.data?.items ?? []).map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -329,26 +347,21 @@ export function SchedulesPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>
-            {effectivePolicy === undefined
-              ? "Schedules"
-              : `Schedules for ${policies.data?.items.find((p) => p.id === effectivePolicy)?.name ?? "policy"}`}
-          </CardTitle>
+          <CardTitle>All schedules</CardTitle>
         </CardHeader>
         <CardContent>
-          {effectivePolicy === undefined ? (
-            <p className="text-sm text-gray-500">Pick a policy to list its schedules.</p>
-          ) : schedules.isLoading ? (
-            <TableSkeleton rows={4} cols={4} />
+          {schedules.isLoading ? (
+            <TableSkeleton rows={4} cols={5} />
           ) : schedules.data === undefined ? (
             <p className="text-sm text-destructive">Could not load schedules: {errorText(schedules.error)}</p>
           ) : schedules.data.items.length === 0 ? (
-            <p className="text-sm text-gray-500">No schedules for this policy yet.</p>
+            <p className="text-sm text-gray-500">No schedules yet.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-border text-xs text-gray-500">
+                    <th className="py-2 pr-4 font-medium">Policy</th>
                     <th className="py-2 pr-4 font-medium">Cadence</th>
                     <th className="py-2 pr-4 font-medium">Timezone</th>
                     <th className="py-2 pr-4 font-medium">Next run</th>
@@ -362,6 +375,7 @@ export function SchedulesPage() {
                 <tbody>
                   {schedules.data.items.map((s) => (
                     <tr key={s.id} className="border-b border-border">
+                      <td className="py-2 pr-4 font-medium">{policyName(s.policy_id)}</td>
                       <td className="py-2 pr-4">
                         <span className="font-medium">{SCHEDULE_KIND_LABEL[s.kind as ScheduleKind] ?? s.kind}</span>{" "}
                         <span className="font-mono text-xs text-gray-500">{cadenceOf(s)}</span>
@@ -411,14 +425,13 @@ export function SchedulesPage() {
         </CardContent>
       </Card>
 
-      {effectivePolicy !== undefined && (
-        <ScheduleDialog
-          open={dialog.open}
-          policyId={effectivePolicy}
-          schedule={dialog.schedule}
-          onClose={() => setDialog({ open: false })}
-        />
-      )}
+      <ScheduleDialog
+        open={dialog.open}
+        policyId={policyId}
+        policies={(policies.data?.items ?? []).map((p) => ({ id: p.id, name: p.name }))}
+        schedule={dialog.schedule}
+        onClose={() => setDialog({ open: false })}
+      />
 
       <Dialog
         open={runTarget !== undefined}

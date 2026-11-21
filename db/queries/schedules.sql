@@ -6,6 +6,9 @@ SELECT * FROM schedules WHERE id = $1;
 -- name: ListSchedulesByPolicy :many
 SELECT * FROM schedules WHERE policy_id = $1 ORDER BY created_at ASC;
 
+-- name: ListAllSchedules :many
+SELECT * FROM schedules ORDER BY created_at ASC;
+
 -- name: ListDueSchedules :many
 SELECT * FROM schedules
 WHERE NOT is_paused AND next_run_at IS NOT NULL AND next_run_at <= now()

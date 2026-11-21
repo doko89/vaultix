@@ -16,13 +16,10 @@ type runResponse struct {
 	Jobs []jobDTO `json:"jobs"`
 }
 
-// handleListSchedules serves GET /api/schedules?policy_id= (required).
+// handleListSchedules serves GET /api/schedules?policy_id= (optional:
+// empty lists every schedule across policies).
 func (h *handler) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 	policyID := strings.TrimSpace(r.URL.Query().Get("policy_id"))
-	if policyID == "" {
-		writeError(w, badRequest("policy_id query parameter is required"))
-		return
-	}
 	items, err := h.deps.Schedules.List(r.Context(), policyID)
 	if err != nil {
 		writeError(w, err)

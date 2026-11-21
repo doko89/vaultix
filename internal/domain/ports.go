@@ -138,6 +138,7 @@ type ScheduleRepository interface {
 	UpdateSchedule(ctx context.Context, s *Schedule) error
 	DeleteSchedule(ctx context.Context, id string) error
 	ListSchedules(ctx context.Context, policyID string) ([]Schedule, error)
+	ListAllSchedules(ctx context.Context) ([]Schedule, error)
 	// DueSchedules returns active schedules with NextRunAt <= now, for the
 	// scheduler worker to claim.
 	DueSchedules(ctx context.Context, now time.Time, limit int) ([]Schedule, error)

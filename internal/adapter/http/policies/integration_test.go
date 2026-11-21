@@ -128,6 +128,14 @@ func (m *memScheduleRepo) ListSchedules(_ context.Context, policyID string) ([]d
 	return out, nil
 }
 
+func (m *memScheduleRepo) ListAllSchedules(_ context.Context) ([]domain.Schedule, error) {
+	var out []domain.Schedule
+	for _, s := range m.items {
+		out = append(out, *s)
+	}
+	return out, nil
+}
+
 func (m *memScheduleRepo) DueSchedules(_ context.Context, _ time.Time, _ int) ([]domain.Schedule, error) {
 	return nil, nil
 }

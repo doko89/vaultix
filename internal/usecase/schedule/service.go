@@ -145,8 +145,12 @@ func (s *Service) Get(ctx context.Context, id string) (*domain.Schedule, error) 
 	return s.schedules.GetSchedule(ctx, id)
 }
 
-// List returns all schedules for a policy.
+// List returns all schedules, optionally confined to one policy.
+// An empty policyID lists every schedule across policies.
 func (s *Service) List(ctx context.Context, policyID string) ([]domain.Schedule, error) {
+	if policyID == "" {
+		return s.schedules.ListAllSchedules(ctx)
+	}
 	return s.schedules.ListSchedules(ctx, policyID)
 }
 

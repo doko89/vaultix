@@ -104,6 +104,44 @@ func (q *Queries) GetScheduleByID(ctx context.Context, arg GetScheduleByIDParams
 	return i, err
 }
 
+const listAllSchedules = `-- name: ListAllSchedules :many
+SELECT id, policy_id, name, schedule_type, cron_expression, interval_minutes, timezone, next_run_at, last_run_at, is_paused, concurrency_limit, created_at, updated_at FROM schedules ORDER BY created_at ASC
+`
+
+func (q *Queries) ListAllSchedules(ctx context.Context) ([]Schedule, error) {
+	rows, err := q.db.Query(ctx, listAllSchedules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Schedule{}
+	for rows.Next() {
+		var i Schedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.PolicyID,
+			&i.Name,
+			&i.ScheduleType,
+			&i.CronExpression,
+			&i.IntervalMinutes,
+			&i.Timezone,
+			&i.NextRunAt,
+			&i.LastRunAt,
+			&i.IsPaused,
+			&i.ConcurrencyLimit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDueSchedules = `-- name: ListDueSchedules :many
 SELECT id, policy_id, name, schedule_type, cron_expression, interval_minutes, timezone, next_run_at, last_run_at, is_paused, concurrency_limit, created_at, updated_at FROM schedules
 WHERE NOT is_paused AND next_run_at IS NOT NULL AND next_run_at <= now()

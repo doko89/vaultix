@@ -75,6 +75,14 @@ func (f *fakeSchedules) ListSchedules(_ context.Context, policyID string) ([]dom
 	return out, nil
 }
 
+func (f *fakeSchedules) ListAllSchedules(_ context.Context) ([]domain.Schedule, error) {
+	var out []domain.Schedule
+	for _, s := range f.items {
+		out = append(out, *cloneSchedule(s))
+	}
+	return out, nil
+}
+
 func (f *fakeSchedules) DueSchedules(_ context.Context, now time.Time, limit int) ([]domain.Schedule, error) {
 	var out []domain.Schedule
 	for _, s := range f.items {
@@ -543,6 +551,10 @@ func TestDeleteAndList(t *testing.T) {
 	list, err := s.List(ctx, "pol_1")
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list: %+v err=%v", list, err)
+	}
+	all, err := s.List(ctx, "")
+	if err != nil || len(all) != 1 {
+		t.Fatalf("list all: %+v err=%v", all, err)
 	}
 	if err := s.Delete(ctx, sched.ID); err != nil {
 		t.Fatalf("delete: %v", err)

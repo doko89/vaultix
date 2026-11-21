@@ -92,7 +92,7 @@ func TestScheduleCRUDPauseResume(t *testing.T) {
 	stub := &stubScheduleService{t: t}
 	stub.onGet = func(id string) (*domain.Schedule, error) { return sampleSchedule(), nil }
 	stub.onList = func(policyID string) ([]domain.Schedule, error) {
-		if policyID != "pol_1" {
+		if policyID != "pol_1" && policyID != "" {
 			t.Fatalf("list policy: %q", policyID)
 		}
 		return []domain.Schedule{*sampleSchedule()}, nil
@@ -120,8 +120,8 @@ func TestScheduleCRUDPauseResume(t *testing.T) {
 	if list.Total != 1 {
 		t.Fatalf("list total: %+v", list)
 	}
-	if rec := doRequest(t, mux, "GET", "/api/schedules", nil); rec.Code != http.StatusBadRequest {
-		t.Fatalf("list w/o policy_id: want 400, got %d", rec.Code)
+	if rec := doRequest(t, mux, "GET", "/api/schedules", nil); rec.Code != http.StatusOK {
+		t.Fatalf("list w/o policy_id: want 200, got %d", rec.Code)
 	}
 	if rec := doRequest(t, mux, "GET", "/api/schedules/sch_1", nil); rec.Code != http.StatusOK {
 		t.Fatalf("get: want 200, got %d", rec.Code)

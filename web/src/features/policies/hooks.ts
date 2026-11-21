@@ -195,14 +195,10 @@ export function useTargetMutations(policyId: ID, onDone: () => void) {
 
 // --- Schedules ---
 
-export function useSchedules(policyId: ID | undefined) {
+export function useSchedules(policyId?: ID) {
   return useQuery({
     queryKey: [...SCHEDULES_KEY, "list", policyId ?? ""],
-    queryFn: () => {
-      if (policyId === undefined) throw new Error("policy id is required");
-      return listSchedules(policyId);
-    },
-    enabled: policyId !== undefined,
+    queryFn: () => listSchedules(policyId),
   });
 }
 

@@ -174,6 +174,25 @@ func (r *ScheduleRepo) ListSchedules(ctx context.Context, policyID string) ([]do
 	return out, nil
 }
 
+// ListAllSchedules returns every schedule across policies.
+func (r *ScheduleRepo) ListAllSchedules(ctx context.Context) ([]domain.Schedule, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	rows, err := r.q.ListAllSchedules(ctx)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	out := make([]domain.Schedule, 0, len(rows))
+	for _, row := range rows {
+		s, err := mapSchedule(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 // DueSchedules returns active schedules with NextRunAt <= now, oldest
 // first. The scheduler worker claims each row with RecordScheduleRun;
 // concurrent workers must coordinate externally (single worker assumed).
