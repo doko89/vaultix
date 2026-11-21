@@ -568,11 +568,17 @@ func TestHeartbeatEndpoint(t *testing.T) {
 		t.Fatalf("empty body: want 400, got %d", rec.Code)
 	}
 	rec := do(t, hb, "POST", "/api/agent/heartbeat",
-		`{"version":"1.2.0","running_jobs":2,"docker_available":true}`, "agent-token")
+		`{"version":"1.2.0","os":"linux","architecture":"amd64","ip_address":"10.0.0.2","disk_total_bytes":200,"disk_free_bytes":80,"running_jobs":2,"docker_available":true}`, "agent-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("heartbeat: want 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
-	if len(agents.heartbeatIn) != 1 || agents.heartbeatIn[0].AgentID != "ag-1" || agents.heartbeatIn[0].RunningJobs != 2 {
+	if len(agents.heartbeatIn) != 1 {
+		t.Fatalf("heartbeat input: %+v", agents.heartbeatIn)
+	}
+	in := agents.heartbeatIn[0]
+	if in.AgentID != "ag-1" || in.RunningJobs != 2 || in.OS != "linux" || in.Architecture != "amd64" ||
+		in.IPAddress != "10.0.0.2" || in.DiskTotalBytes == nil || *in.DiskTotalBytes != 200 ||
+		in.DiskFreeBytes == nil || *in.DiskFreeBytes != 80 {
 		t.Fatalf("heartbeat input: %+v", agents.heartbeatIn)
 	}
 	var out heartbeatResponse

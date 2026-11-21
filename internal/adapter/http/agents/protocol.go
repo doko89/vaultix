@@ -68,7 +68,8 @@ func (h *handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.agents.Heartbeat(r.Context(), agentuc.HeartbeatInput{
-		AgentID: cred.AgentID, Version: req.Version, IPAddress: req.IPAddress,
+		AgentID: cred.AgentID, Version: req.Version, OS: req.OS, Architecture: req.Architecture,
+		IPAddress:      req.IPAddress,
 		DiskTotalBytes: req.DiskTotalBytes, DiskFreeBytes: req.DiskFreeBytes,
 		RunningJobs: req.RunningJobs, DockerAvailable: req.DockerAvailable,
 		Capabilities: req.Capabilities,

@@ -154,12 +154,18 @@ mkdir -p /etc/vaultix /var/lib/vaultix/work
 chown vaultix:vaultix /var/lib/vaultix /var/lib/vaultix/work
 
 # --- redeem the enroll token ---------------------------------------------------
-# POST /api/agent/enroll {"token","hostname"} -> 201 {"agent_id","token",...}.
+# POST /api/agent/enroll {"token","hostname","os","architecture"} -> 201 {"agent_id","token",...}.
 # The enroll token is single-use; the RESPONSE credential is what the agent
 # persists. Neither secret is ever printed.
-log "redeeming enroll token at ${MANAGER} (hostname: ${EFFECTIVE_HOST})..."
-PAYLOAD="$(MANAGER_TOKEN="${TOKEN}" ENROLL_HOST="${EFFECTIVE_HOST}" python3 -c \
-  'import json,os; print(json.dumps({"token": os.environ["MANAGER_TOKEN"], "hostname": os.environ["ENROLL_HOST"]}))')"
+ENROLL_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "$(uname -m)" in
+  x86_64)  ENROLL_ARCH="amd64" ;;
+  aarch64|arm64) ENROLL_ARCH="arm64" ;;
+  *)       ENROLL_ARCH="$(uname -m)" ;;
+esac
+log "redeeming enroll token at ${MANAGER} (hostname: ${EFFECTIVE_HOST}, ${ENROLL_OS}/${ENROLL_ARCH})..."
+PAYLOAD="$(MANAGER_TOKEN="${TOKEN}" ENROLL_HOST="${EFFECTIVE_HOST}" ENROLL_OS="${ENROLL_OS}" ENROLL_ARCH="${ENROLL_ARCH}" python3 -c \
+  'import json,os; print(json.dumps({"token": os.environ["MANAGER_TOKEN"], "hostname": os.environ["ENROLL_HOST"], "os": os.environ["ENROLL_OS"], "architecture": os.environ["ENROLL_ARCH"]}))')"
 BODY_FILE="$(mktemp)"
 HTTP_CODE="$(curl -sS -o "${BODY_FILE}" -w '%{http_code}' -X POST "${MANAGER}/api/agent/enroll" \
   -H 'Content-Type: application/json' -d "${PAYLOAD}")" \

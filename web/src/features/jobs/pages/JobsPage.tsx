@@ -21,6 +21,8 @@ import {
   useJobs,
   useRetryJob,
 } from "../hooks";
+import { useAgent } from "@/features/agents/hooks";
+import { usePolicy } from "@/features/policies/hooks";
 import { encryptionLabel, isActiveState } from "../types";
 import type { Job } from "../types";
 
@@ -92,6 +94,8 @@ function JobDetail({ jobId, onClose }: { jobId: ID | undefined; onClose: () => v
   const [confirm, setConfirm] = useState<"retry" | "cancel" | null>(null);
 
   const job = detail.data;
+  const agent = useAgent(job?.agent_id);
+  const policy = usePolicy(job?.policy_id);
   const active = job !== undefined && isActiveState(job.state);
   const retryable = job !== undefined && (job.state === "failed" || job.state === "cancelled");
   const cancellable = job !== undefined && active;
@@ -121,12 +125,14 @@ function JobDetail({ jobId, onClose }: { jobId: ID | undefined; onClose: () => v
             <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
               <div className="flex justify-between gap-2">
                 <dt className="text-gray-500">Agent</dt>
-                <dd className="font-mono text-xs">{job.agent_id}</dd>
+                <dd className="font-medium" title={job.agent_id}>
+                  {agent.data?.hostname ?? job.agent_id}
+                </dd>
               </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-gray-500">Policy</dt>
-                <dd className="font-mono text-xs">
-                  {job.policy_id} <span className="text-gray-500">v{job.policy_version}</span>
+                <dd className="font-medium" title={job.policy_id}>
+                  {policy.data?.name ?? job.policy_id} <span className="text-gray-500">v{job.policy_version}</span>
                 </dd>
               </div>
               <div className="flex justify-between gap-2">

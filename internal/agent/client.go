@@ -38,6 +38,8 @@ type HeartbeatRequest struct {
 	AgentID         string    `json:"agent_id"`
 	Hostname        string    `json:"hostname"`
 	Version         string    `json:"version"`
+	OS              string    `json:"os,omitempty"`
+	Architecture    string    `json:"architecture,omitempty"`
 	Capabilities    []string  `json:"capabilities,omitempty"`
 	DiskTotal       uint64    `json:"disk_total_bytes,omitempty"`
 	DiskFree        uint64    `json:"disk_free_bytes,omitempty"`

@@ -470,6 +470,40 @@ func TestHeartbeatPresenceTransitions(t *testing.T) {
 	}
 }
 
+func TestHeartbeatStoresSysinfo(t *testing.T) {
+	svc, _, _, _ := testSetup()
+	ctx := context.Background()
+	ag, _ := enroll(t, svc)
+	total, free := uint64(200), uint64(80)
+	if _, err := svc.Heartbeat(ctx, HeartbeatInput{
+		AgentID: ag.ID, Version: "1.2.0", OS: "linux", Architecture: "amd64",
+		IPAddress: "10.0.0.3", DiskTotalBytes: &total, DiskFreeBytes: &free,
+	}); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	stored, _ := svc.GetAgent(ctx, ag.ID)
+	if stored.Agent.OS != "linux" || stored.Agent.Architecture != "amd64" {
+		t.Fatalf("os/arch not stored: %+v", stored.Agent)
+	}
+	if stored.Agent.DiskTotalBytes == nil || *stored.Agent.DiskTotalBytes != 200 {
+		t.Fatalf("disk total not stored: %+v", stored.Agent)
+	}
+	// Omitted readings keep stored values instead of wiping them.
+	if _, err := svc.Heartbeat(ctx, HeartbeatInput{AgentID: ag.ID, Version: "1.2.0"}); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	kept, _ := svc.GetAgent(ctx, ag.ID)
+	if kept.Agent.OS != "linux" || kept.Agent.Architecture != "amd64" {
+		t.Fatalf("os/arch wiped by omission: %+v", kept.Agent)
+	}
+	if kept.Agent.DiskTotalBytes == nil || *kept.Agent.DiskTotalBytes != 200 {
+		t.Fatalf("disk wiped by omission: %+v", kept.Agent)
+	}
+	if kept.Agent.DiskFreeBytes == nil || *kept.Agent.DiskFreeBytes != 80 {
+		t.Fatalf("disk free wiped by omission: %+v", kept.Agent)
+	}
+}
+
 func TestHeartbeatValidation(t *testing.T) {
 	svc, _, _, _ := testSetup()
 	ctx := context.Background()

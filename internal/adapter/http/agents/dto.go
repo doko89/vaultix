@@ -92,6 +92,8 @@ type enrollResponse struct {
 
 type heartbeatRequest struct {
 	Version         string   `json:"version" validate:"max=64"`
+	OS              string   `json:"os" validate:"max=64"`
+	Architecture    string   `json:"architecture" validate:"max=32"`
 	IPAddress       string   `json:"ip_address" validate:"max=64"`
 	DiskTotalBytes  *uint64  `json:"disk_total_bytes,omitempty"`
 	DiskFreeBytes   *uint64  `json:"disk_free_bytes,omitempty"`

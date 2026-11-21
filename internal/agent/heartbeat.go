@@ -45,6 +45,9 @@ type HeartbeatRunner struct {
 	// NewBackOff builds the backoff strategy; defaults to DefaultBackOff.
 	// It is a seam for deterministic tests.
 	NewBackOff func() backoff.BackOff
+	// HostFacts collects OS/arch/IP/disk per beat; defaults to
+	// CollectHostFacts. A seam for deterministic tests.
+	HostFacts func() HostFacts
 }
 
 func (r *HeartbeatRunner) logger() *slog.Logger {
@@ -67,13 +70,23 @@ func (r *HeartbeatRunner) Beat(ctx context.Context) (HeartbeatResponse, error) {
 	if hostname == "" {
 		hostname, _ = os.Hostname()
 	}
+	collect := r.HostFacts
+	if collect == nil {
+		collect = CollectHostFacts
+	}
+	facts := collect()
 	ctx, cancel := context.WithTimeout(ctx, r.Config.RequestTimeout)
 	defer cancel()
 	return r.Client.Heartbeat(ctx, HeartbeatRequest{
 		AgentID:         r.Config.AgentID,
 		Hostname:        hostname,
 		Version:         r.Version,
+		OS:              facts.OS,
+		Architecture:    facts.Arch,
 		Capabilities:    r.Capabilities,
+		DiskTotal:       facts.DiskTotal,
+		DiskFree:        facts.DiskFree,
+		IPAddress:       facts.IP,
 		DockerAvailable: r.Config.DockerEnabled,
 		At:              time.Now().UTC(),
 	})

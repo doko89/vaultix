@@ -12,6 +12,8 @@ import (
 type HeartbeatInput struct {
 	AgentID         string
 	Version         string
+	OS              string
+	Architecture    string
 	IPAddress       string
 	DiskTotalBytes  *uint64
 	DiskFreeBytes   *uint64
@@ -67,11 +69,23 @@ func (s *Service) Heartbeat(ctx context.Context, in HeartbeatInput) (*HeartbeatR
 	if hb.Version != "" {
 		ag.Version = hb.Version
 	}
+	if strings.TrimSpace(in.OS) != "" {
+		ag.OS = strings.TrimSpace(in.OS)
+	}
+	if strings.TrimSpace(in.Architecture) != "" {
+		ag.Architecture = strings.TrimSpace(in.Architecture)
+	}
 	if hb.IPAddress != "" {
 		ag.IPAddress = hb.IPAddress
 	}
-	ag.DiskTotalBytes = in.DiskTotalBytes
-	ag.DiskFreeBytes = in.DiskFreeBytes
+	// Disk facts are sticky: an omitted reading (unknown on the agent)
+	// keeps the stored values instead of wiping them.
+	if in.DiskTotalBytes != nil {
+		ag.DiskTotalBytes = in.DiskTotalBytes
+	}
+	if in.DiskFreeBytes != nil {
+		ag.DiskFreeBytes = in.DiskFreeBytes
+	}
 	if in.Capabilities != nil {
 		ag.Capabilities = append([]string(nil), in.Capabilities...)
 	}
