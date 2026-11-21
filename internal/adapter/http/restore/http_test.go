@@ -303,6 +303,10 @@ func TestRestore_PlanValidatesAndMapsGating(t *testing.T) {
 	require.Equal(t, "plan-1", plan.ID)
 	require.Equal(t, "s-1", restores.lastPlan.SnapshotID)
 
+	resp = postJSON(t, srv.URL+"/api/restore/plan", `{"kind":"file","snapshot_id":"s-1","target_agent_id":"agent-2","requested_by":"op"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	require.Equal(t, "agent-2", restores.lastPlan.TargetAgentID)
+
 	for _, body := range []string{
 		`{"kind":"nope","snapshot_id":"s-1","requested_by":"op"}`,
 		`{"kind":"file","requested_by":"op"}`,

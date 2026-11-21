@@ -39,7 +39,8 @@ func (h *handler) planRestore(w http.ResponseWriter, r *http.Request) {
 		Kind: kind, SnapshotID: strings.TrimSpace(body.SnapshotID),
 		SnapshotIDs: body.SnapshotIDs, Engine: body.Engine, Paths: body.Paths,
 		Destination: body.Destination, TargetDB: body.TargetDB,
-		Order: body.Order, RequestedBy: body.RequestedBy,
+		Order: body.Order, TargetAgentID: strings.TrimSpace(body.TargetAgentID),
+		RequestedBy: body.RequestedBy,
 	})
 	if err != nil {
 		writeServiceError(w, err)

@@ -97,6 +97,65 @@ func (f *fakeReporter) GetRestoreJob(_ context.Context, id string) (*domain.Rest
 	return j, nil
 }
 
+type fakeAgents struct {
+	mu sync.Mutex
+	m  map[string]*domain.Agent
+}
+
+func (f *fakeAgents) seed(a *domain.Agent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.m == nil {
+		f.m = map[string]*domain.Agent{}
+	}
+	f.m[a.ID] = a
+}
+func (f *fakeAgents) CreateAgent(_ context.Context, a *domain.Agent) error {
+	f.seed(a)
+	return nil
+}
+func (f *fakeAgents) GetAgent(_ context.Context, id string) (*domain.Agent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.m[id]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	cp := *a
+	return &cp, nil
+}
+func (f *fakeAgents) UpdateAgent(_ context.Context, a *domain.Agent) error {
+	f.seed(a)
+	return nil
+}
+func (f *fakeAgents) DeleteAgent(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.m, id)
+	return nil
+}
+func (f *fakeAgents) ListAgents(_ context.Context, _ domain.ListOptions) (domain.ListResult[domain.Agent], error) {
+	return domain.ListResult[domain.Agent]{}, nil
+}
+func (f *fakeAgents) StoreCredential(_ context.Context, _ *domain.AgentCredential) error {
+	return nil
+}
+func (f *fakeAgents) GetCredentialByHash(_ context.Context, _ string) (*domain.AgentCredential, error) {
+	return nil, domain.ErrNotFound
+}
+func (f *fakeAgents) ListAgentCredentials(_ context.Context, _ string) ([]domain.AgentCredential, error) {
+	return nil, nil
+}
+func (f *fakeAgents) UpdateCredential(_ context.Context, _ *domain.AgentCredential) error {
+	return nil
+}
+func (f *fakeAgents) RecordHeartbeat(_ context.Context, _ *domain.AgentHeartbeat) error {
+	return nil
+}
+func (f *fakeAgents) LatestHeartbeat(_ context.Context, _ string) (*domain.AgentHeartbeat, error) {
+	return nil, domain.ErrNotFound
+}
+
 type mutableClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -311,4 +370,60 @@ func TestPlan_EncryptedSnapshotWarnsAboutKey(t *testing.T) {
 	plan, err := s.Plan(context.Background(), PlanRequest{Kind: KindFile, SnapshotID: "s-1", RequestedBy: "op"})
 	require.NoError(t, err)
 	require.Contains(t, strings.Join(plan.Warnings, "\n"), "key-9")
+}
+
+func testServiceWithAgents(snaps []*domain.Snapshot, agents []*domain.Agent) *Service {
+	fs := &fakeSnapshots{}
+	for _, s := range snaps {
+		fs.seed(s)
+	}
+	fa := &fakeAgents{}
+	for _, a := range agents {
+		fa.seed(a)
+	}
+	s, err := New(Deps{
+		Snapshots: fs, Reporter: &fakeReporter{}, Agents: fa,
+		Clock: &mutableClock{now: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func TestPlan_CrossAgentTarget(t *testing.T) {
+	snap := verifiedSnap("s-1", domain.TargetHostFilesystem, "/srv")
+	s := testServiceWithAgents([]*domain.Snapshot{snap}, []*domain.Agent{
+		{ID: "agent-1", Hostname: "vm-old"},
+		{ID: "agent-2", Hostname: "vm-new"},
+		{ID: "agent-dead", Hostname: "vm-dead", Disabled: true},
+	})
+	ctx := context.Background()
+
+	// Default: source agent, no cross-agent warning.
+	plan, err := s.Plan(ctx, PlanRequest{Kind: KindFile, SnapshotID: "s-1", RequestedBy: "op"})
+	require.NoError(t, err)
+	require.Equal(t, "agent-1", plan.AgentID)
+	require.NotContains(t, strings.Join(plan.Warnings, "\n"), "cross-agent")
+
+	// Override: target agent + warning.
+	plan, err = s.Plan(ctx, PlanRequest{Kind: KindFile, SnapshotID: "s-1", TargetAgentID: "agent-2", RequestedBy: "op"})
+	require.NoError(t, err)
+	require.Equal(t, "agent-2", plan.AgentID)
+	require.Contains(t, strings.Join(plan.Warnings, "\n"), "cross-agent")
+
+	// Unknown target fails fast.
+	_, err = s.Plan(ctx, PlanRequest{Kind: KindFile, SnapshotID: "s-1", TargetAgentID: "missing", RequestedBy: "op"})
+	require.ErrorIs(t, err, domain.ErrNotFound)
+
+	// Revoked target is refused.
+	_, err = s.Plan(ctx, PlanRequest{Kind: KindFile, SnapshotID: "s-1", TargetAgentID: "agent-dead", RequestedBy: "op"})
+	require.ErrorIs(t, err, domain.ErrConflict)
+}
+
+func TestPlan_TargetWithoutAgentsPort(t *testing.T) {
+	snap := verifiedSnap("s-1", domain.TargetHostFilesystem, "/srv")
+	s, _, _ := testService(snap) // no Agents wired
+	_, err := s.Plan(context.Background(), PlanRequest{Kind: KindFile, SnapshotID: "s-1", TargetAgentID: "agent-2", RequestedBy: "op"})
+	require.ErrorIs(t, err, domain.ErrValidation)
 }

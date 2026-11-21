@@ -38,6 +38,7 @@ export interface PlanRequest {
   destination?: string | undefined;
   target_db?: string | undefined;
   order?: string[] | undefined;
+  target_agent_id?: string | undefined;
   requested_by: string;
 }
 

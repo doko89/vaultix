@@ -316,6 +316,7 @@ func wire(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger,
 	restoreSvc, err := restoreuc.New(restoreuc.Deps{
 		Snapshots: repos.Snapshots,
 		Reporter:  restoreReporter{repo: repos.RestoreJobs},
+		Agents:    repos.Agents,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore service: %w", err)

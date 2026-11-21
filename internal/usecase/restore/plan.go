@@ -56,6 +56,10 @@ type PlanRequest struct {
 	TargetDB string
 	// Order is the explicit snapshot-ID sequence for stack restores.
 	Order []string
+	// TargetAgentID overrides the restore target (cross-agent restore,
+	// e.g. the source VM was destroyed). Empty restores to the
+	// snapshot's agent.
+	TargetAgentID string
 	// RequestedBy records the planning actor for the audit trail.
 	RequestedBy string
 }
@@ -102,27 +106,35 @@ type PlanStore interface {
 }
 
 // buildPlan validates the request against loaded snapshots and assembles
-// the ordered steps, warnings, and compatibility notes.
-func buildPlan(now, expires int64, newID func() string, req PlanRequest, snaps []*domain.Snapshot) (*Plan, error) {
+// the ordered steps, warnings, and compatibility notes. targetAgent is
+// the validated restore target (source agent by default).
+func buildPlan(now, expires int64, newID func() string, req PlanRequest, snaps []*domain.Snapshot, targetAgent string) (*Plan, error) {
 	if !req.Kind.Valid() {
 		return nil, fmt.Errorf("%w: unknown restore kind %q", domain.ErrValidation, req.Kind)
 	}
 	if len(snaps) == 0 {
 		return nil, fmt.Errorf("%w: at least one snapshot is required", domain.ErrValidation)
 	}
-	agent := snaps[0].AgentID
+	source := snaps[0].AgentID
 	for _, s := range snaps[1:] {
-		if s.AgentID != agent {
+		if s.AgentID != source {
 			return nil, fmt.Errorf("%w: all restore sources must belong to one agent", domain.ErrValidation)
 		}
+	}
+	if strings.TrimSpace(targetAgent) == "" {
+		targetAgent = source
 	}
 	plan := &Plan{
 		ID:          newID(),
 		Kind:        req.Kind,
-		AgentID:     agent,
+		AgentID:     targetAgent,
 		RequestedBy: strings.TrimSpace(req.RequestedBy),
 		CreatedAt:   now,
 		ExpiresAt:   expires,
+	}
+	if targetAgent != source {
+		plan.Warnings = append(plan.Warnings,
+			fmt.Sprintf("cross-agent restore: data from agent %q restores to agent %q; paths and volumes must exist there", source, targetAgent))
 	}
 	for _, s := range snaps {
 		plan.SnapshotIDs = append(plan.SnapshotIDs, s.ID)

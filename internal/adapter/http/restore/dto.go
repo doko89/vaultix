@@ -120,15 +120,16 @@ type SnapshotDetailDTO struct {
 
 // PlanRequestDTO asks for a restore plan.
 type PlanRequestDTO struct {
-	Kind        string   `json:"kind"`
-	SnapshotID  string   `json:"snapshot_id,omitempty"`
-	SnapshotIDs []string `json:"snapshot_ids,omitempty"`
-	Engine      string   `json:"engine,omitempty"`
-	Paths       []string `json:"paths,omitempty"`
-	Destination string   `json:"destination,omitempty"`
-	TargetDB    string   `json:"target_db,omitempty"`
-	Order       []string `json:"order,omitempty"`
-	RequestedBy string   `json:"requested_by"`
+	Kind          string   `json:"kind"`
+	SnapshotID    string   `json:"snapshot_id,omitempty"`
+	SnapshotIDs   []string `json:"snapshot_ids,omitempty"`
+	Engine        string   `json:"engine,omitempty"`
+	Paths         []string `json:"paths,omitempty"`
+	Destination   string   `json:"destination,omitempty"`
+	TargetDB      string   `json:"target_db,omitempty"`
+	Order         []string `json:"order,omitempty"`
+	TargetAgentID string   `json:"target_agent_id,omitempty"`
+	RequestedBy   string   `json:"requested_by"`
 }
 
 // PlanDTO is a restore plan with steps, warnings, and compatibility notes.

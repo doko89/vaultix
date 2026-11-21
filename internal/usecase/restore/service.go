@@ -23,6 +23,7 @@ type Service struct {
 	plans     PlanStore
 	tokens    TokenStore
 	reporter  JobReporter
+	agents    domain.AgentRepository
 	clock     domain.Clock
 	newID     func() string
 	newToken  func() string
@@ -31,12 +32,14 @@ type Service struct {
 }
 
 // Deps wires a Service. Plans/Tokens default to in-process memory stores,
-// Clock to the system clock, and TTLs to their defaults.
+// Clock to the system clock, and TTLs to their defaults. Agents is
+// optional but required when plans name a target agent.
 type Deps struct {
 	Snapshots domain.SnapshotRepository
 	Plans     PlanStore
 	Tokens    TokenStore
 	Reporter  JobReporter
+	Agents    domain.AgentRepository
 
 	Clock    domain.Clock
 	IDGen    func() string
@@ -80,7 +83,7 @@ func New(d Deps) (*Service, error) {
 	}
 	return &Service{
 		snapshots: d.Snapshots, plans: plans, tokens: tokens,
-		reporter: d.Reporter, clock: clock,
+		reporter: d.Reporter, agents: d.Agents, clock: clock,
 		newID: newID, newToken: newToken,
 		planTTL: planTTL, tokenTTL: tokenTTL,
 	}, nil
@@ -101,6 +104,22 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (*Plan, error) {
 	} else if len(ids) == 0 {
 		return nil, fmt.Errorf("%w: stack restore needs at least one snapshot_id", domain.ErrValidation)
 	}
+	// Resolve the restore target before touching snapshots: a bad target
+	// fails fast without depending on snapshot state.
+	targetAgent := strings.TrimSpace(req.TargetAgentID)
+	if targetAgent != "" {
+		if s.agents == nil {
+			return nil, fmt.Errorf("%w: target agent lookup is not configured", domain.ErrValidation)
+		}
+		target, err := s.agents.GetAgent(ctx, targetAgent)
+		if err != nil {
+			return nil, err
+		}
+		if target.Disabled {
+			return nil, fmt.Errorf("%w: target agent is revoked", domain.ErrConflict)
+		}
+		targetAgent = target.ID
+	}
 	snaps := make([]*domain.Snapshot, 0, len(ids))
 	for _, id := range ids {
 		snap, err := s.snapshots.GetSnapshot(ctx, id)
@@ -113,7 +132,7 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		snaps = append(snaps, snap)
 	}
 	now := s.clock.Now()
-	plan, err := buildPlan(now.Unix(), now.Add(s.planTTL).Unix(), s.newID, req, snaps)
+	plan, err := buildPlan(now.Unix(), now.Add(s.planTTL).Unix(), s.newID, req, snaps, targetAgent)
 	if err != nil {
 		return nil, err
 	}

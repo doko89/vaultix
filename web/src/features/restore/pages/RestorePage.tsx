@@ -23,6 +23,7 @@ import {
 } from "../hooks";
 import { kindForTargetType, RESTORE_KINDS } from "../types";
 import type { RestoreKind, RestorePlan, RestoreSnapshot } from "../types";
+import { useAgents } from "@/features/agents/hooks";
 
 // Restore wizard: select snapshot → targets → destination → explicit typed
 // confirm → execute → status polling. Overwrite warnings from the plan are
@@ -52,11 +53,13 @@ export function RestorePage() {
   const [alternate, setAlternate] = useState(false);
   const [destination, setDestination] = useState("");
   const [targetDb, setTargetDb] = useState("");
+  const [targetAgentId, setTargetAgentId] = useState("");
   const [plan, setPlan] = useState<RestorePlan | undefined>(undefined);
   const [typed, setTyped] = useState("");
   const [jobId, setJobId] = useState<ID | undefined>(undefined);
 
   const snapshots = useRestorableSnapshots();
+  const agents = useAgents({ limit: 100 });
   const actor = useCurrentActor();
   const planMut = usePlanRestore();
   const confirmMut = useConfirmRestore();
@@ -106,6 +109,7 @@ export function RestorePage() {
         paths: pathList.length > 0 ? pathList : undefined,
         destination: alternate && destination.trim() !== "" ? destination.trim() : undefined,
         target_db: targetDb.trim() === "" ? undefined : targetDb.trim(),
+        target_agent_id: targetAgentId === "" ? undefined : targetAgentId,
         requested_by: actorName,
       },
       {
@@ -319,6 +323,22 @@ export function RestorePage() {
                 />
               </div>
             )}
+            <div>
+              <label className="mb-1 block text-sm font-medium">Target agent</label>
+              <Select value={targetAgentId} onChange={(e) => setTargetAgentId(e.target.value)}>
+                <option value="">Source agent (default)</option>
+                {(agents.data?.items ?? [])
+                  .filter((a) => a.status !== "revoked")
+                  .map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.hostname} ({a.status})
+                    </option>
+                  ))}
+              </Select>
+              <p className="mt-1 text-xs text-gray-500">
+                Restore to a different agent when the source VM is gone. The plan warns before anything runs.
+              </p>
+            </div>
             <div className="flex justify-between">
               <Button type="button" variant="outline" onClick={() => setStep("snapshot")}>
                 Back
@@ -336,6 +356,12 @@ export function RestorePage() {
               <p className="text-sm text-gray-500">No plan yet.</p>
             ) : (
               <>
+                <p className="text-sm text-gray-500">
+                  Target agent:{" "}
+                  <span className="font-medium text-foreground">
+                    {(agents.data?.items ?? []).find((a) => a.id === plan.agent_id)?.hostname ?? plan.agent_id}
+                  </span>
+                </p>
                 {plan.warnings.length > 0 && (
                   <div className="rounded-md border border-warning/30 bg-warning/10 p-3">
                     <p className="text-sm font-medium text-warning">Warnings — read before confirming</p>
