@@ -109,13 +109,28 @@ func NewWebhookSender(cfg WebhookConfig, client *http.Client, log *slog.Logger) 
 // Channel implements Sender.
 func (s *WebhookSender) Channel() domain.NotificationChannel { return domain.NotificationWebhook }
 
-// Send delivers n to the endpoint named by n.Recipient.
+// Send delivers n to n.Recipient: a full http(s) URL posts directly,
+// otherwise the name resolves against configured endpoints.
 func (s *WebhookSender) Send(ctx context.Context, n *domain.Notification) error {
-	ep, ok := s.cfg.Endpoints[n.Recipient]
-	if !ok {
-		return fmt.Errorf("webhook: unknown endpoint %q", n.Recipient)
+	ep, name, err := s.resolve(n.Recipient)
+	if err != nil {
+		return err
 	}
-	return s.post(ctx, n.Recipient, ep, eventOf(n), n)
+	return s.post(ctx, name, ep, eventOf(n), n)
+}
+
+// resolve maps a recipient to an endpoint: URLs post directly, names
+// resolve from configuration.
+func (s *WebhookSender) resolve(recipient string) (WebhookEndpoint, string, error) {
+	trimmed := strings.TrimSpace(recipient)
+	if u, err := url.Parse(trimmed); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return WebhookEndpoint{URL: trimmed}, trimmed, nil
+	}
+	ep, ok := s.cfg.Endpoints[trimmed]
+	if !ok {
+		return WebhookEndpoint{}, "", fmt.Errorf("webhook: unknown endpoint %q", recipient)
+	}
+	return ep, trimmed, nil
 }
 
 // Test posts a test message to an arbitrary URL without persisting anything.
@@ -138,24 +153,30 @@ func eventOf(n *domain.Notification) string {
 }
 
 func (s *WebhookSender) post(ctx context.Context, name string, ep WebhookEndpoint, event string, n *domain.Notification) error {
-	body, err := json.Marshal(webhookPayload{
-		Event:     event,
-		Subject:   n.Subject,
-		Body:      n.Body,
-		Recipient: n.Recipient,
-		RefType:   n.RefType,
-		RefID:     n.RefID,
-		Attempt:   n.Attempts + 1,
-		SentAt:    s.now().UTC().Format(time.RFC3339),
-	})
-	if err != nil {
-		return fmt.Errorf("webhook %q: encode payload: %w", name, err)
+	// RawBody carries a rendered rule template: POST it verbatim (a rule
+	// header may override the JSON content type). Otherwise the default
+	// JSON envelope goes out.
+	body := []byte(n.Body)
+	if !n.RawBody {
+		var err error
+		if body, err = json.Marshal(webhookPayload{
+			Event:     event,
+			Subject:   n.Subject,
+			Body:      n.Body,
+			Recipient: n.Recipient,
+			RefType:   n.RefType,
+			RefID:     n.RefID,
+			Attempt:   n.Attempts + 1,
+			SentAt:    s.now().UTC().Format(time.RFC3339),
+		}); err != nil {
+			return fmt.Errorf("webhook %q: encode payload: %w", name, err)
+		}
 	}
 	exp := backoff.NewExponentialBackOff()
 	exp.InitialInterval = s.cfg.InitialInterval
 	exp.MaxInterval = s.cfg.MaxInterval
-	_, err = backoff.Retry(ctx, func() (struct{}, error) {
-		return struct{}{}, s.tryPost(ctx, name, ep, body)
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		return struct{}{}, s.tryPost(ctx, name, ep, n, body)
 	}, backoff.WithBackOff(exp), backoff.WithMaxTries(uint(s.cfg.MaxTries)),
 		backoff.WithNotify(func(err error, d time.Duration) {
 			// Redacted: endpoint name + sanitized error only.
@@ -169,7 +190,7 @@ func (s *WebhookSender) post(ctx context.Context, name string, ep WebhookEndpoin
 	return nil
 }
 
-func (s *WebhookSender) tryPost(ctx context.Context, name string, ep WebhookEndpoint, body []byte) error {
+func (s *WebhookSender) tryPost(ctx context.Context, name string, ep WebhookEndpoint, n *domain.Notification, body []byte) error {
 	reqCtx, cancel := context.WithTimeout(ctx, s.cfg.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ep.URL, bytes.NewReader(body))
@@ -179,6 +200,13 @@ func (s *WebhookSender) tryPost(ctx context.Context, name string, ep WebhookEndp
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "vaultix-manager/1.0")
 	for k, v := range ep.Headers {
+		req.Header.Set(k, v)
+	}
+	// Per-notification (rule) headers win over endpoint defaults.
+	for k, v := range n.Headers {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	if ep.Secret != "" {

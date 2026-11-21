@@ -8,6 +8,7 @@ import (
 
 	"github.com/vaultix/vaultix/db/gen"
 	"github.com/vaultix/vaultix/internal/domain"
+	notifuc "github.com/vaultix/vaultix/internal/usecase/notification"
 )
 
 // DefaultQueryTimeout bounds every repository DB call that arrives without
@@ -33,6 +34,7 @@ type Repos struct {
 	Notifications *NotificationRepo
 	Audit         *AuditRepo
 	Updates       *UpdateRepo
+	Rules         *RuleRepo
 }
 
 // New builds the repository bundle on the shared pool. The pool must be
@@ -56,6 +58,7 @@ func New(pool *pgxpool.Pool) *Repos {
 		Notifications: &NotificationRepo{baseRepo: base},
 		Audit:         &AuditRepo{baseRepo: base},
 		Updates:       &UpdateRepo{baseRepo: base},
+		Rules:         &RuleRepo{baseRepo: base},
 	}
 }
 
@@ -76,6 +79,7 @@ var (
 	_ domain.NotificationRepository = (*NotificationRepo)(nil)
 	_ domain.AuditRepository        = (*AuditRepo)(nil)
 	_ domain.AgentUpdateRepository  = (*UpdateRepo)(nil)
+	_ notifuc.RuleStore             = (*RuleRepo)(nil)
 )
 
 // baseRepo shares the pool (for transactions) and the pool-bound queries.

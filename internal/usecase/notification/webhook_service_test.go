@@ -109,6 +109,56 @@ func TestWebhookNoRetryOnClientError(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load(), "4xx must fail fast without retry")
 }
 
+func TestWebhookDirectURLHeadersRawBody(t *testing.T) {
+	var gotBody []byte
+	var gotAuth, gotCT string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		gotAuth = r.Header.Get("Authorization")
+		gotCT = r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sender, err := NewWebhookSender(WebhookConfig{}, nil, discardLogger())
+	require.NoError(t, err)
+
+	err = sender.Send(context.Background(), &domain.Notification{
+		Recipient: srv.URL + "/hook",
+		Subject:   "job failed",
+		Body:      `{"text":"custom"}`,
+		RawBody:   true,
+		Headers:   map[string]string{"Authorization": "Bearer abc"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `{"text":"custom"}`, string(gotBody))
+	assert.Equal(t, "Bearer abc", gotAuth)
+	assert.Equal(t, "application/json", gotCT)
+}
+
+func TestWebhookRuleHeadersOverrideEndpoint(t *testing.T) {
+	var gotCustom, gotCT string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCustom = r.Header.Get("X-Custom")
+		gotCT = r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := testSenderConfig(srv.URL + "/hook")
+	cfg.Endpoints["ops"] = WebhookEndpoint{URL: srv.URL + "/hook", Headers: map[string]string{"X-Custom": "endpoint"}}
+	sender, err := NewWebhookSender(cfg, nil, discardLogger())
+	require.NoError(t, err)
+
+	err = sender.Send(context.Background(), &domain.Notification{
+		Recipient: "ops", Body: "x",
+		Headers: map[string]string{"X-Custom": "rule", "Content-Type": "text/plain"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "rule", gotCustom)
+	assert.Equal(t, "text/plain", gotCT)
+}
+
 func TestWebhookUnknownEndpoint(t *testing.T) {
 	sender, err := NewWebhookSender(testSenderConfig("http://example.invalid"), nil, discardLogger())
 	require.NoError(t, err)
@@ -252,6 +302,31 @@ func TestNotifyJobFailedFansOut(t *testing.T) {
 		assert.Equal(t, domain.NotificationSent, r.Status)
 		assert.NotNil(t, r.SentAt)
 	}
+}
+
+func TestFanoutRendersTemplateAndHeaders(t *testing.T) {
+	web := &stubSender{channel: domain.NotificationWebhook}
+	svc, outbox := testService(t, []Rule{
+		{
+			Name: "templated", Events: []string{EventJobFailed},
+			Channel: domain.NotificationWebhook, Recipient: "https://hooks.example/x",
+			Headers:      map[string]string{"Authorization": "Bearer t"},
+			BodyTemplate: `{"text":"{{.event}} {{.ref_id}}"}`,
+			Enabled:      true,
+		},
+	}, web)
+	_, err := svc.NotifyJobFailed(context.Background(), JobFailedEvent{
+		JobID: "job-1", AgentID: "a-1", PolicyID: "p-1",
+		ErrorCode: "E", ErrorMessage: "boom", Attempt: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, web.sent, 1)
+	assert.Equal(t, `{"text":"job_failed job-1"}`, web.sent[0].Body)
+	assert.True(t, web.sent[0].RawBody)
+	assert.Equal(t, "Bearer t", web.sent[0].Headers["Authorization"])
+	require.Len(t, outbox.rows, 1)
+	assert.True(t, outbox.rows[0].RawBody)
+	assert.Equal(t, `{"text":"job_failed job-1"}`, outbox.rows[0].Body)
 }
 
 func TestNotifyJobFailedMarksDeliveryFailure(t *testing.T) {

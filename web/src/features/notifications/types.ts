@@ -17,6 +17,8 @@ export interface NotificationRule {
   events: string[];
   channel: string;
   recipient: string;
+  headers?: Record<string, string> | undefined;
+  body_template?: string | undefined;
   enabled: boolean;
 }
 
@@ -25,8 +27,22 @@ export interface NotificationRuleInput {
   events: string[];
   channel: ChannelKind;
   recipient: string;
+  headers?: Record<string, string> | undefined;
+  body_template?: string | undefined;
   enabled: boolean;
 }
+
+// Variables available in webhook body templates (Go text/template).
+export const TEMPLATE_VARIABLES: { name: string; description: string }[] = [
+  { name: "{{.event}}", description: "event type, e.g. job_failed" },
+  { name: "{{.subject}}", description: "default subject line" },
+  { name: "{{.body}}", description: "default message text" },
+  { name: "{{.recipient}}", description: "rule recipient" },
+  { name: "{{.ref_type}}", description: "related object type" },
+  { name: "{{.ref_id}}", description: "related object id" },
+  { name: "{{.attempt}}", description: "delivery attempt number" },
+  { name: "{{.sent_at}}", description: "timestamp (RFC3339)" },
+];
 
 // Back-compat alias for the scaffold type name.
 export type NotificationChannel = NotificationRule;

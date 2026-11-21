@@ -248,6 +248,22 @@ func TestNotificationRulesCRUD(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	assert.Contains(t, rec.Body.String(), `"ops@example.com"`)
 
+	// Create with webhook headers + body template.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/notifications/rules",
+		strings.NewReader(`{"name":"hook","events":["job_failed"],"channel":"webhook","recipient":"https://hooks.example/x","headers":{"Authorization":"Bearer t"},"body_template":"{\"text\":\"{{.subject}}\"}","enabled":true}`))
+	m.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `"body_template"`)
+	assert.Contains(t, rec.Body.String(), `"Authorization"`)
+
+	// Bad template rejected.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/notifications/rules",
+		strings.NewReader(`{"name":"bad","events":["job_failed"],"channel":"webhook","recipient":"https://hooks.example/x","body_template":"{{.bogus}}","enabled":true}`))
+	m.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+
 	// Invalid channel rejected.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/notifications/rules",

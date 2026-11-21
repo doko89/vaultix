@@ -214,6 +214,21 @@ type Notification struct {
 	ScheduledAt pgtype.Timestamptz `json:"scheduled_at"`
 	SentAt      pgtype.Timestamptz `json:"sent_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	Headers     []byte             `json:"headers"`
+	BodyRaw     bool               `json:"body_raw"`
+}
+
+type NotificationRule struct {
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	Events       []string           `json:"events"`
+	Channel      string             `json:"channel"`
+	Recipient    string             `json:"recipient"`
+	Headers      []byte             `json:"headers"`
+	BodyTemplate string             `json:"body_template"`
+	Enabled      bool               `json:"enabled"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type OidcProvider struct {

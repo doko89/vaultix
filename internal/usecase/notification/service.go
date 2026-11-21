@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/vaultix/vaultix/internal/domain"
 )
@@ -174,6 +175,23 @@ func (s *Service) fanout(ctx context.Context, eventType, refType, refID, subject
 			RefID:     refID,
 			CreatedAt: s.clock.Now().UTC(),
 		}
+		if r.Channel == domain.NotificationWebhook {
+			n.Headers = cloneHeaders(r.Headers)
+			if strings.TrimSpace(r.BodyTemplate) != "" {
+				rendered, err := RenderBodyTemplate(r.BodyTemplate, TemplateData{
+					Event: eventType, Subject: subject, Body: body,
+					Recipient: r.Recipient, RefType: refType, RefID: refID,
+					SentAt: n.CreatedAt.Format(time.RFC3339),
+				})
+				if err != nil {
+					s.log.Error("notification template render failed",
+						"event", eventType, "rule", r.ID, "error", err)
+					continue
+				}
+				n.Body = rendered
+				n.RawBody = true
+			}
+		}
 		if err := s.outbox.CreateNotification(ctx, n); err != nil {
 			s.log.Error("notification outbox write failed",
 				"event", eventType, "rule", r.ID, "error", err)
@@ -309,6 +327,20 @@ func (s *Service) TestRule(ctx context.Context, id string) error {
 		Status:    domain.NotificationPending,
 		CreatedAt: s.clock.Now().UTC(),
 	}
+	if r.Channel == domain.NotificationWebhook {
+		n.Headers = cloneHeaders(r.Headers)
+		if strings.TrimSpace(r.BodyTemplate) != "" {
+			rendered, err := RenderBodyTemplate(r.BodyTemplate, TemplateData{
+				Event: "test", Subject: n.Subject, Body: n.Body,
+				Recipient: r.Recipient, SentAt: n.CreatedAt.Format(time.RFC3339),
+			})
+			if err != nil {
+				return fmt.Errorf("notification: test rule %q: %w", id, err)
+			}
+			n.Body = rendered
+			n.RawBody = true
+		}
+	}
 	if err := sender.Send(ctx, n); err != nil {
 		return fmt.Errorf("notification: test rule %q: %w", id, err)
 	}
@@ -320,4 +352,15 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max]
+}
+
+func cloneHeaders(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

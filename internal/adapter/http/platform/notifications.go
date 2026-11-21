@@ -12,14 +12,16 @@ func toRule(r RuleDTO) notificationuc.Rule {
 	return notificationuc.Rule{
 		Name: r.Name, Events: r.Events,
 		Channel:   domain.NotificationChannel(r.Channel),
-		Recipient: r.Recipient, Enabled: r.Enabled,
+		Recipient: r.Recipient, Headers: r.Headers,
+		BodyTemplate: r.BodyTemplate, Enabled: r.Enabled,
 	}
 }
 
 func fromRule(r notificationuc.Rule) RuleDTO {
 	return RuleDTO{
 		ID: r.ID, Name: r.Name, Events: r.Events,
-		Channel: string(r.Channel), Recipient: r.Recipient, Enabled: r.Enabled,
+		Channel: string(r.Channel), Recipient: r.Recipient,
+		Headers: r.Headers, BodyTemplate: r.BodyTemplate, Enabled: r.Enabled,
 	}
 }
 

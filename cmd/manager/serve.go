@@ -463,10 +463,7 @@ func s3ResolveFunc(repos *repo.Repos, box *storageSecretBox) s3.ResolveFunc {
 // (no endpoints configured — rules resolve names server-side), SMTP sender
 // when configured.
 func wireNotifications(cfg Config, repos *repo.Repos, log *slog.Logger) (*notificationuc.Service, error) {
-	rules, err := notificationuc.NewStaticRuleStore(nil)
-	if err != nil {
-		return nil, fmt.Errorf("notification rules: %w", err)
-	}
+	rules := repos.Rules
 	webhook, err := notificationuc.NewWebhookSender(
 		notificationuc.WebhookConfig{Endpoints: map[string]notificationuc.WebhookEndpoint{}},
 		nil, log)

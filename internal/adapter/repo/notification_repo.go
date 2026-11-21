@@ -39,6 +39,10 @@ func (r *NotificationRepo) CreateNotification(ctx context.Context, n *domain.Not
 	if eventType == "" {
 		eventType = "generic"
 	}
+	headers, err := encodeJSON(n.Headers)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 	row, err := r.q.EnqueueNotification(ctx, gen.EnqueueNotificationParams{
@@ -50,6 +54,8 @@ func (r *NotificationRepo) CreateNotification(ctx context.Context, n *domain.Not
 		RelatedType: textOrNull(n.RefType),
 		RelatedID:   relatedID,
 		Column8:     nil,
+		Headers:     headers,
+		BodyRaw:     n.RawBody,
 	})
 	if err != nil {
 		return mapErr(err)
@@ -115,12 +121,16 @@ func (r *NotificationRepo) ListPending(ctx context.Context, limit int) ([]domain
 }
 
 func mapNotification(row gen.Notification) domain.Notification {
+	var headers map[string]string
+	_ = decodeJSON(row.Headers, &headers) // written by us; corrupt rows read empty
 	return domain.Notification{
 		ID:        uuidString(row.ID),
 		Channel:   domain.NotificationChannel(row.Channel),
 		Recipient: row.Recipient,
 		Subject:   row.Subject,
 		Body:      row.Body,
+		Headers:   headers,
+		RawBody:   row.BodyRaw,
 		Status:    domain.NotificationStatus(row.State),
 		RefType:   textOrEmpty(row.RelatedType),
 		RefID:     uuidString(row.RelatedID),

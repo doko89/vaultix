@@ -84,12 +84,14 @@ type DashboardDTO struct {
 
 // RuleDTO is the notification-rule API shape.
 type RuleDTO struct {
-	ID        string   `json:"id,omitempty"`
-	Name      string   `json:"name" validate:"required"`
-	Events    []string `json:"events" validate:"required,min=1"`
-	Channel   string   `json:"channel" validate:"required,oneof=email webhook"`
-	Recipient string   `json:"recipient" validate:"required"`
-	Enabled   bool     `json:"enabled"`
+	ID           string            `json:"id,omitempty"`
+	Name         string            `json:"name" validate:"required"`
+	Events       []string          `json:"events" validate:"required,min=1"`
+	Channel      string            `json:"channel" validate:"required,oneof=email webhook"`
+	Recipient    string            `json:"recipient" validate:"required"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	BodyTemplate string            `json:"body_template,omitempty"`
+	Enabled      bool              `json:"enabled"`
 }
 
 // ---- audit DTOs ----

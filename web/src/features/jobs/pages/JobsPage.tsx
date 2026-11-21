@@ -21,8 +21,8 @@ import {
   useJobs,
   useRetryJob,
 } from "../hooks";
-import { useAgent } from "@/features/agents/hooks";
-import { usePolicy } from "@/features/policies/hooks";
+import { useAgent, useAgents } from "@/features/agents/hooks";
+import { usePolicies, usePolicy } from "@/features/policies/hooks";
 import { encryptionLabel, isActiveState } from "../types";
 import type { Job } from "../types";
 
@@ -44,35 +44,43 @@ function ManualRunDialog({ open, onClose }: { open: boolean; onClose: () => void
   const [policyId, setPolicyId] = useState("");
   const [showErrors, setShowErrors] = useState(false);
   const create = useCreateManualJob(onClose);
+  const agents = useAgents({ limit: 200 });
+  const policies = usePolicies({ limit: 200 });
 
   function submit(): void {
     setShowErrors(true);
-    if (agentId.trim() === "" || policyId.trim() === "") return;
-    create.mutate({ agentId: agentId.trim(), policyId: policyId.trim() });
+    if (agentId === "" || policyId === "") return;
+    create.mutate({ agentId, policyId });
   }
 
   return (
     <Dialog open={open} title="Run manual backup" description="Queues one job for the agent/policy pair." onClose={onClose}>
       <div className="flex flex-col gap-3">
         <div>
-          <label className="mb-1 block text-sm font-medium">Agent ID</label>
-          <Input
-            value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
-            placeholder="agent id"
-            className="font-mono"
-          />
-          {showErrors && agentId.trim() === "" && <p className="mt-1 text-xs text-destructive">Agent ID is required.</p>}
+          <label className="mb-1 block text-sm font-medium">Agent</label>
+          <Select aria-label="Agent" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+            <option value="">Select…</option>
+            {(agents.data?.items ?? [])
+              .filter((a) => a.status !== "revoked")
+              .map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.hostname} ({a.status})
+                </option>
+              ))}
+          </Select>
+          {showErrors && agentId === "" && <p className="mt-1 text-xs text-destructive">Agent is required.</p>}
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Policy ID</label>
-          <Input
-            value={policyId}
-            onChange={(e) => setPolicyId(e.target.value)}
-            placeholder="policy id"
-            className="font-mono"
-          />
-          {showErrors && policyId.trim() === "" && <p className="mt-1 text-xs text-destructive">Policy ID is required.</p>}
+          <label className="mb-1 block text-sm font-medium">Policy</label>
+          <Select aria-label="Policy" value={policyId} onChange={(e) => setPolicyId(e.target.value)}>
+            <option value="">Select…</option>
+            {(policies.data?.items ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} (v{p.current_version})
+              </option>
+            ))}
+          </Select>
+          {showErrors && policyId === "" && <p className="mt-1 text-xs text-destructive">Policy is required.</p>}
         </div>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose} disabled={create.isPending}>

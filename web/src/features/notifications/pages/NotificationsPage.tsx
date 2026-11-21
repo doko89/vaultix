@@ -18,6 +18,7 @@ import {
 } from "../hooks";
 import { CHANNEL_KINDS, NOTIFICATION_EVENTS, validateRule } from "../types";
 import type { ChannelKind, NotificationRule, NotificationRuleInput } from "../types";
+import { TEMPLATE_VARIABLES } from "../types";
 
 function RuleDialog({
   open,
@@ -32,6 +33,8 @@ function RuleDialog({
   const [events, setEvents] = useState<string[]>([]);
   const [channel, setChannel] = useState<ChannelKind>("email");
   const [recipient, setRecipient] = useState("");
+  const [headersText, setHeadersText] = useState("");
+  const [bodyTemplate, setBodyTemplate] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [showErrors, setShowErrors] = useState(false);
   const create = useCreateRule(onClose);
@@ -44,6 +47,12 @@ function RuleDialog({
     setEvents(rule?.events ?? []);
     setChannel((rule?.channel as ChannelKind) ?? "email");
     setRecipient(rule?.recipient ?? "");
+    setHeadersText(
+      Object.entries(rule?.headers ?? {})
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("\n"),
+    );
+    setBodyTemplate(rule?.body_template ?? "");
     setEnabled(rule?.enabled ?? true);
   }, [open, rule]);
 
@@ -54,9 +63,31 @@ function RuleDialog({
     setEvents((prev) => (checked ? [...prev, event] : prev.filter((e) => e !== event)));
   }
 
+  function parseHeaders(): { headers?: Record<string, string> | undefined; error?: string | undefined } {
+    if (headersText.trim() === "") return {};
+    const out: Record<string, string> = {};
+    for (const line of headersText.split("\n")) {
+      if (line.trim() === "") continue;
+      const idx = line.indexOf(":");
+      if (idx <= 0) return { error: `Bad header line (want "Name: value"): ${line.trim()}` };
+      out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+    }
+    return { headers: out };
+  }
+
   function submit(): void {
     setShowErrors(true);
-    const input: NotificationRuleInput = { name: name.trim(), events, channel, recipient: recipient.trim(), enabled };
+    const parsed = channel === "webhook" ? parseHeaders() : {};
+    if (parsed.error !== undefined) return;
+    const input: NotificationRuleInput = {
+      name: name.trim(),
+      events,
+      channel,
+      recipient: recipient.trim(),
+      headers: parsed.headers,
+      body_template: channel === "webhook" && bodyTemplate.trim() !== "" ? bodyTemplate : undefined,
+      enabled,
+    };
     if (validateRule(input).length > 0) return;
     if (rule === undefined) {
       create.mutate(input);
@@ -114,6 +145,37 @@ function RuleDialog({
             />
           </div>
         </div>
+        {channel === "webhook" && (
+          <>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Headers (optional, one per line)</label>
+              <textarea
+                value={headersText}
+                onChange={(e) => setHeadersText(e.target.value)}
+                placeholder={"Authorization: Bearer …\nX-Custom: value"}
+                rows={2}
+                className="flex min-h-9 w-full rounded-md border border-border bg-background px-3 py-1 font-mono text-xs placeholder:text-gray-500"
+              />
+              {showErrors && parseHeaders().error !== undefined && (
+                <p className="mt-1 text-xs text-destructive">{parseHeaders().error}</p>
+              )}
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Body template (optional)</label>
+              <textarea
+                value={bodyTemplate}
+                onChange={(e) => setBodyTemplate(e.target.value)}
+                placeholder='{"text": "{{.subject}} — {{.body}}"}'
+                rows={3}
+                className="flex min-h-9 w-full rounded-md border border-border bg-background px-3 py-1 font-mono text-xs placeholder:text-gray-500"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Empty keeps the default JSON shape. Available:{" "}
+                {TEMPLATE_VARIABLES.map((v) => v.name).join(" ")}
+              </p>
+            </div>
+          </>
+        )}
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           Enabled

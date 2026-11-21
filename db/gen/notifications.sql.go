@@ -11,10 +11,68 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createNotificationRule = `-- name: CreateNotificationRule :one
+INSERT INTO notification_rules (name, events, channel, recipient, headers, body_template, enabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, name, events, channel, recipient, headers, body_template, enabled, created_at, updated_at
+`
+
+type CreateNotificationRuleParams struct {
+	Name         string   `json:"name"`
+	Events       []string `json:"events"`
+	Channel      string   `json:"channel"`
+	Recipient    string   `json:"recipient"`
+	Headers      []byte   `json:"headers"`
+	BodyTemplate string   `json:"body_template"`
+	Enabled      bool     `json:"enabled"`
+}
+
+func (q *Queries) CreateNotificationRule(ctx context.Context, arg CreateNotificationRuleParams) (NotificationRule, error) {
+	row := q.db.QueryRow(ctx, createNotificationRule,
+		arg.Name,
+		arg.Events,
+		arg.Channel,
+		arg.Recipient,
+		arg.Headers,
+		arg.BodyTemplate,
+		arg.Enabled,
+	)
+	var i NotificationRule
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Events,
+		&i.Channel,
+		&i.Recipient,
+		&i.Headers,
+		&i.BodyTemplate,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteNotificationRule = `-- name: DeleteNotificationRule :execrows
+DELETE FROM notification_rules WHERE id = $1
+`
+
+type DeleteNotificationRuleParams struct {
+	ID pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) DeleteNotificationRule(ctx context.Context, arg DeleteNotificationRuleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteNotificationRule, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const enqueueNotification = `-- name: EnqueueNotification :one
-INSERT INTO notifications (channel, recipient, event_type, subject, body, related_type, related_id, scheduled_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, coalesce($8, now()))
-RETURNING id, channel, recipient, event_type, subject, body, state, attempts, last_error, related_type, related_id, scheduled_at, sent_at, created_at
+INSERT INTO notifications (channel, recipient, event_type, subject, body, related_type, related_id, scheduled_at, headers, body_raw)
+VALUES ($1, $2, $3, $4, $5, $6, $7, coalesce($8, now()), $9, $10)
+RETURNING id, channel, recipient, event_type, subject, body, state, attempts, last_error, related_type, related_id, scheduled_at, sent_at, created_at, headers, body_raw
 `
 
 type EnqueueNotificationParams struct {
@@ -26,6 +84,8 @@ type EnqueueNotificationParams struct {
 	RelatedType pgtype.Text `json:"related_type"`
 	RelatedID   pgtype.UUID `json:"related_id"`
 	Column8     interface{} `json:"column_8"`
+	Headers     []byte      `json:"headers"`
+	BodyRaw     bool        `json:"body_raw"`
 }
 
 func (q *Queries) EnqueueNotification(ctx context.Context, arg EnqueueNotificationParams) (Notification, error) {
@@ -38,6 +98,8 @@ func (q *Queries) EnqueueNotification(ctx context.Context, arg EnqueueNotificati
 		arg.RelatedType,
 		arg.RelatedID,
 		arg.Column8,
+		arg.Headers,
+		arg.BodyRaw,
 	)
 	var i Notification
 	err := row.Scan(
@@ -55,13 +117,15 @@ func (q *Queries) EnqueueNotification(ctx context.Context, arg EnqueueNotificati
 		&i.ScheduledAt,
 		&i.SentAt,
 		&i.CreatedAt,
+		&i.Headers,
+		&i.BodyRaw,
 	)
 	return i, err
 }
 
 const getNotification = `-- name: GetNotification :one
 
-SELECT id, channel, recipient, event_type, subject, body, state, attempts, last_error, related_type, related_id, scheduled_at, sent_at, created_at FROM notifications WHERE id = $1
+SELECT id, channel, recipient, event_type, subject, body, state, attempts, last_error, related_type, related_id, scheduled_at, sent_at, created_at, headers, body_raw FROM notifications WHERE id = $1
 `
 
 type GetNotificationParams struct {
@@ -87,12 +151,75 @@ func (q *Queries) GetNotification(ctx context.Context, arg GetNotificationParams
 		&i.ScheduledAt,
 		&i.SentAt,
 		&i.CreatedAt,
+		&i.Headers,
+		&i.BodyRaw,
 	)
 	return i, err
 }
 
+const getNotificationRule = `-- name: GetNotificationRule :one
+SELECT id, name, events, channel, recipient, headers, body_template, enabled, created_at, updated_at FROM notification_rules WHERE id = $1
+`
+
+type GetNotificationRuleParams struct {
+	ID pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) GetNotificationRule(ctx context.Context, arg GetNotificationRuleParams) (NotificationRule, error) {
+	row := q.db.QueryRow(ctx, getNotificationRule, arg.ID)
+	var i NotificationRule
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Events,
+		&i.Channel,
+		&i.Recipient,
+		&i.Headers,
+		&i.BodyTemplate,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listNotificationRules = `-- name: ListNotificationRules :many
+SELECT id, name, events, channel, recipient, headers, body_template, enabled, created_at, updated_at FROM notification_rules ORDER BY created_at ASC
+`
+
+func (q *Queries) ListNotificationRules(ctx context.Context) ([]NotificationRule, error) {
+	rows, err := q.db.Query(ctx, listNotificationRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NotificationRule{}
+	for rows.Next() {
+		var i NotificationRule
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Events,
+			&i.Channel,
+			&i.Recipient,
+			&i.Headers,
+			&i.BodyTemplate,
+			&i.Enabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingNotifications = `-- name: ListPendingNotifications :many
-SELECT id, channel, recipient, event_type, subject, body, state, attempts, last_error, related_type, related_id, scheduled_at, sent_at, created_at FROM notifications
+SELECT id, channel, recipient, event_type, subject, body, state, attempts, last_error, related_type, related_id, scheduled_at, sent_at, created_at, headers, body_raw FROM notifications
 WHERE state = 'pending' AND scheduled_at <= now()
 ORDER BY scheduled_at ASC
 LIMIT $1
@@ -126,6 +253,8 @@ func (q *Queries) ListPendingNotifications(ctx context.Context, arg ListPendingN
 			&i.ScheduledAt,
 			&i.SentAt,
 			&i.CreatedAt,
+			&i.Headers,
+			&i.BodyRaw,
 		); err != nil {
 			return nil, err
 		}
@@ -211,4 +340,50 @@ func (q *Queries) UpdateNotification(ctx context.Context, arg UpdateNotification
 		arg.SentAt,
 	)
 	return err
+}
+
+const updateNotificationRule = `-- name: UpdateNotificationRule :one
+UPDATE notification_rules
+SET name = $2, events = $3, channel = $4, recipient = $5,
+    headers = $6, body_template = $7, enabled = $8, updated_at = now()
+WHERE id = $1
+RETURNING id, name, events, channel, recipient, headers, body_template, enabled, created_at, updated_at
+`
+
+type UpdateNotificationRuleParams struct {
+	ID           pgtype.UUID `json:"id"`
+	Name         string      `json:"name"`
+	Events       []string    `json:"events"`
+	Channel      string      `json:"channel"`
+	Recipient    string      `json:"recipient"`
+	Headers      []byte      `json:"headers"`
+	BodyTemplate string      `json:"body_template"`
+	Enabled      bool        `json:"enabled"`
+}
+
+func (q *Queries) UpdateNotificationRule(ctx context.Context, arg UpdateNotificationRuleParams) (NotificationRule, error) {
+	row := q.db.QueryRow(ctx, updateNotificationRule,
+		arg.ID,
+		arg.Name,
+		arg.Events,
+		arg.Channel,
+		arg.Recipient,
+		arg.Headers,
+		arg.BodyTemplate,
+		arg.Enabled,
+	)
+	var i NotificationRule
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Events,
+		&i.Channel,
+		&i.Recipient,
+		&i.Headers,
+		&i.BodyTemplate,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

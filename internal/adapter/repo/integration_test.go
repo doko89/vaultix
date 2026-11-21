@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vaultix/vaultix/internal/domain"
+	notifuc "github.com/vaultix/vaultix/internal/usecase/notification"
 )
 
 var (
@@ -621,6 +622,43 @@ func TestIntegrationRestoreJobs(t *testing.T) {
 	gotApproved, err := repos.RestoreJobs.GetJob(ctx, approved.ID)
 	require.NoError(t, err)
 	require.Equal(t, approver.ID, gotApproved.ApprovedBy)
+}
+
+func TestIntegrationNotificationRules(t *testing.T) {
+	repos := openIntegrationRepos(t)
+	ctx, cancel := testCtx()
+	defer cancel()
+	suffix := uniqueSuffix(t)
+
+	created, err := repos.Rules.CreateRule(ctx, notifuc.Rule{
+		Name:         "hook-" + suffix,
+		Events:       []string{"job_failed"},
+		Channel:      domain.NotificationWebhook,
+		Recipient:    "https://hooks.example/x",
+		Headers:      map[string]string{"Authorization": "Bearer t"},
+		BodyTemplate: `{"text":"{{.subject}}"}`,
+		Enabled:      true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, created.ID)
+
+	got, err := repos.Rules.GetRule(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Bearer t", got.Headers["Authorization"])
+	require.Equal(t, `{"text":"{{.subject}}"}`, got.BodyTemplate)
+
+	listed, err := repos.Rules.ListRules(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, listed)
+
+	created.Name = "hook-renamed-" + suffix
+	updated, err := repos.Rules.UpdateRule(ctx, created.ID, created)
+	require.NoError(t, err)
+	require.Equal(t, "hook-renamed-"+suffix, updated.Name)
+
+	require.NoError(t, repos.Rules.DeleteRule(ctx, created.ID))
+	_, err = repos.Rules.GetRule(ctx, created.ID)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestIntegrationSnapshots(t *testing.T) {

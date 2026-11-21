@@ -23,10 +23,16 @@ const (
 type Notification struct {
 	ID        string
 	Channel   NotificationChannel
-	Recipient string // address or webhook name; never a secret
+	Recipient string // address or webhook URL/name; never a secret
 	Subject   string
 	Body      string
-	Status    NotificationStatus
+	// Headers carries resolved webhook request headers (rule headers at
+	// fanout); other channels ignore it.
+	Headers map[string]string
+	// RawBody marks Body as a rendered rule template: webhook delivery
+	// POSTs it verbatim instead of the default JSON envelope.
+	RawBody bool
+	Status  NotificationStatus
 	// RefType/RefID point at the triggering entity (backup_job, agent...).
 	RefType   string
 	RefID     string

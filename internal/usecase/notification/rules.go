@@ -36,17 +36,23 @@ type AgentTransitionEvent struct {
 	To       domain.AgentStatus
 }
 
-// Rule routes one or more event types to a channel recipient. Recipients are
-// email addresses or webhook endpoint *names* (resolved server-side from
-// configuration); secret-bearing webhook URLs must never be stored here —
-// see WebhookSender.
+// Rule routes one or more event types to a channel recipient. Recipients
+// are email addresses or webhook targets: a full http(s) URL posts
+// directly, otherwise the name resolves server-side from configuration
+// (see WebhookSender).
 type Rule struct {
-	ID        string
-	Name      string
-	Events    []string
-	Channel   domain.NotificationChannel
+	ID      string
+	Name    string
+	Events  []string
+	Channel domain.NotificationChannel
+	// Recipient is an email address or webhook URL/endpoint name.
 	Recipient string
-	Enabled   bool
+	// Headers adds webhook request headers (webhook channel only).
+	Headers map[string]string
+	// BodyTemplate overrides the webhook POST body, rendered as a Go
+	// template over TemplateData (empty keeps the default JSON shape).
+	BodyTemplate string
+	Enabled      bool
 }
 
 // Validate checks rule invariants.
@@ -74,6 +80,25 @@ func (r Rule) Validate() error {
 	}
 	if r.Channel == domain.NotificationEmail && !strings.Contains(r.Recipient, "@") {
 		return fmt.Errorf("%w: email recipient must be an address", domain.ErrValidation)
+	}
+	if len(r.Headers) > maxRuleHeaders {
+		return fmt.Errorf("%w: at most %d headers", domain.ErrValidation, maxRuleHeaders)
+	}
+	for k, v := range r.Headers {
+		if strings.TrimSpace(k) == "" {
+			return fmt.Errorf("%w: header names must not be blank", domain.ErrValidation)
+		}
+		if strings.ContainsAny(v, "\r\n") {
+			return fmt.Errorf("%w: header %q must not contain newlines", domain.ErrValidation, k)
+		}
+	}
+	if len(r.BodyTemplate) > maxBodyTemplateBytes {
+		return fmt.Errorf("%w: body template exceeds %d bytes", domain.ErrValidation, maxBodyTemplateBytes)
+	}
+	if strings.TrimSpace(r.BodyTemplate) != "" {
+		if err := CheckBodyTemplate(r.BodyTemplate); err != nil {
+			return err
+		}
 	}
 	return nil
 }
