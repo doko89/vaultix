@@ -1,6 +1,8 @@
 import type { ID, JobState } from "@/shared/types";
 
 // Job shapes from internal/adapter/http/jobs (jobs.go DTOs).
+// Pointer DTO fields without `omitempty` serialize as null (not absent)
+// when unmeasurable, so the matching fields below accept null.
 
 export interface Job {
   id: ID;
@@ -10,11 +12,11 @@ export interface Job {
   schedule_id?: string;
   trigger: string;
   state: JobState;
-  progress?: number;
-  bytes_read?: number;
-  bytes_compressed?: number;
-  bytes_uploaded?: number;
-  compression_ratio?: number;
+  progress?: number | null;
+  bytes_read?: number | null;
+  bytes_compressed?: number | null;
+  bytes_uploaded?: number | null;
+  compression_ratio?: number | null;
   encrypted: boolean;
   key_ref?: string;
   storage_id?: string;
@@ -23,8 +25,8 @@ export interface Job {
   error_message?: string;
   retry_of?: string;
   attempt: number;
-  started_at?: string;
-  finished_at?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
   created_by?: string;
   created_at: string;
   updated_at: string;

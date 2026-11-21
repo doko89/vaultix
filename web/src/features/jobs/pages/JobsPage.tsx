@@ -121,7 +121,7 @@ function JobDetail({ jobId, onClose }: { jobId: ID; onClose: () => void }) {
             <div>
               <div className="mb-1 flex justify-between text-xs text-gray-500">
                 <span>Progress</span>
-                <span>{job.progress === undefined ? "—" : formatPercent(job.progress)}</span>
+                <span>{job.progress === undefined || job.progress === null ? "—" : formatPercent(job.progress)}</span>
               </div>
               <Progress value={job.progress} />
             </div>
@@ -151,7 +151,11 @@ function JobDetail({ jobId, onClose }: { jobId: ID; onClose: () => void }) {
               </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-gray-500">Compression ratio</dt>
-                <dd>{job.compression_ratio === undefined ? "—" : `${job.compression_ratio.toFixed(2)}×`}</dd>
+                <dd>
+                  {job.compression_ratio === undefined || job.compression_ratio === null
+                    ? "—"
+                    : `${job.compression_ratio.toFixed(2)}×`}
+                </dd>
               </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-gray-500">Encryption</dt>
