@@ -29,9 +29,10 @@ RUN CGO_ENABLED=0 go build -o /out/manager ./cmd/manager
 
 # --- Stage 3: runtime ------------------------------------------------------
 FROM debian:bookworm-slim
-# curl backs the compose healthcheck (GET /healthz).
+# curl backs the compose healthcheck (GET /healthz); ca-certificates lets
+# the manager verify TLS upstreams (release sync hits api.github.com).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --no-log-init --create-home --home-dir /var/lib/vaultix vaultix
 WORKDIR /app
