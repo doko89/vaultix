@@ -30,8 +30,17 @@ var endpoints = map[string]endpoint{
 	"auth.me": {mGet, "/api/auth/me"},
 
 	// Agents (existing: internal/adapter/http/agents MountUI).
-	"agents.list": {mGet, "/api/agents"},
-	"agents.show": {mGet, "/api/agents/{id}"},
+	"agents.list":     {mGet, "/api/agents"},
+	"agents.show":     {mGet, "/api/agents/{id}"},
+	"agents.revoke":   {mPost, "/api/agents/{id}/revoke"},
+	"agents.delete":   {mDelete, "/api/agents/{id}"},
+	"agents.describe": {mGet, "/api/agents/{id}/update"},
+	"agents.update":   {mPost, "/api/agents/{id}/update"},
+
+	// Agent updates (internal/adapter/http/agents update.go).
+	"updates.check":  {mPost, "/api/agents/updates/check"},
+	"updates.list":   {mGet, "/api/agents/updates/artifacts"},
+	"updates.delete": {mDelete, "/api/agents/updates/artifacts/{id}"},
 
 	// Policies (existing: internal/adapter/http/policies Mount).
 	"policies.list": {mGet, "/api/policies"},

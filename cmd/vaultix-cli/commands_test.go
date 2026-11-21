@@ -148,6 +148,10 @@ const (
 	fixtureRestore = `{"id":"rj-1","agent_id":"ag-1","snapshot_id":"snap-1","state":"queued","created_at":"2026-11-01T11:00:00Z","updated_at":"2026-11-01T11:00:00Z"}`
 	fixtureKeys    = `{"items":[{"id":"kid-1","name":"ci","scopes":["read"],"key_prefix":"vxk_abc","expires_at":"2027-01-01T00:00:00Z","created_at":"2026-11-01T00:00:00Z"}],"total":1}`
 	fixtureKeyNew  = `{"id":"kid-2","name":"ci-2","key":"vxk_shown_once_abc123"}`
+	fixtureUpdate  = `{"latest":{"id":"art-1","version":"v2.0.0","goos":"linux","goarch":"amd64","sha256":"ab12","size_bytes":10,"uploaded_by":"release-sync","created_at":"2026-11-01T00:00:00Z"},"available":true,"pending":null}`
+	fixtureSlot    = `{"target_version":"v2.0.0","goos":"linux","goarch":"amd64","status":"pending","error":"","requested_by":"","requested_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z"}`
+	fixtureArts    = `{"items":[{"id":"art-1","version":"v2.0.0","goos":"linux","goarch":"amd64","sha256":"ab12","size_bytes":10,"uploaded_by":"release-sync","created_at":"2026-11-01T00:00:00Z"}]}`
+	fixtureCheck   = `{"checked_at":"2026-11-01T00:00:00Z","cached":[],"up_to_date":true}`
 )
 
 // TestCommandRequestTable pins every command's method/path/body against the
@@ -171,6 +175,31 @@ func TestCommandRequestTable(t *testing.T) {
 		{"agents show", []string{"agents", "show", "ag-1"}, "", func(f *fakeManager) {
 			f.on("GET", "/api/agents/ag-1", fixtureAgent)
 		}, []wantRequest{{"GET", "/api/agents/ag-1", nil, ""}}},
+		{"agents revoke", []string{"agents", "revoke", "ag-1", "--yes"}, "", func(f *fakeManager) {
+			f.on("POST", "/api/agents/ag-1/revoke", fixtureAgent)
+		}, []wantRequest{{"POST", "/api/agents/ag-1/revoke", nil, ""}}},
+		{"agents delete", []string{"agents", "delete", "ag-1", "--yes"}, "", func(f *fakeManager) {
+			f.on("DELETE", "/api/agents/ag-1", `{}`)
+		}, []wantRequest{{"DELETE", "/api/agents/ag-1", nil, ""}}},
+		{"agents update-status", []string{"agents", "update-status", "ag-1"}, "", func(f *fakeManager) {
+			f.on("GET", "/api/agents/ag-1/update", fixtureUpdate)
+		}, []wantRequest{{"GET", "/api/agents/ag-1/update", nil, ""}}},
+		{"agents update", []string{"agents", "update", "ag-1", "--yes"}, "", func(f *fakeManager) {
+			f.on("GET", "/api/agents/ag-1/update", fixtureUpdate)
+			f.on("POST", "/api/agents/ag-1/update", fixtureSlot)
+		}, []wantRequest{
+			{"GET", "/api/agents/ag-1/update", nil, ""},
+			{"POST", "/api/agents/ag-1/update", nil, `{"artifact_id":"art-1"}`},
+		}},
+		{"updates check", []string{"updates", "check"}, "", func(f *fakeManager) {
+			f.on("POST", "/api/agents/updates/check", fixtureCheck)
+		}, []wantRequest{{"POST", "/api/agents/updates/check", nil, ""}}},
+		{"updates list", []string{"updates", "list"}, "", func(f *fakeManager) {
+			f.on("GET", "/api/agents/updates/artifacts", fixtureArts)
+		}, []wantRequest{{"GET", "/api/agents/updates/artifacts", nil, ""}}},
+		{"updates delete", []string{"updates", "delete", "art-1"}, "", func(f *fakeManager) {
+			f.on("DELETE", "/api/agents/updates/artifacts/art-1", `{}`)
+		}, []wantRequest{{"DELETE", "/api/agents/updates/artifacts/art-1", nil, ""}}},
 
 		{"policies list", []string{"policies", "list"}, "", func(f *fakeManager) {
 			f.on("GET", "/api/policies", fixturePolices)
@@ -210,6 +239,9 @@ func TestCommandRequestTable(t *testing.T) {
 		{"restore plan", []string{"restore", "plan", "--kind", "file", "--snapshot", "snap-1", "--requested-by", "alice"}, "", func(f *fakeManager) {
 			f.on("POST", "/api/restore/plan", fixturePlan)
 		}, []wantRequest{{"POST", "/api/restore/plan", nil, `{"kind":"file","snapshot_id":"snap-1","requested_by":"alice"}`}}},
+		{"restore plan cross-agent", []string{"restore", "plan", "--kind", "file", "--snapshot", "snap-1", "--target-agent", "ag-2", "--requested-by", "alice"}, "", func(f *fakeManager) {
+			f.on("POST", "/api/restore/plan", fixturePlan)
+		}, []wantRequest{{"POST", "/api/restore/plan", nil, `{"kind":"file","snapshot_id":"snap-1","target_agent_id":"ag-2","requested_by":"alice"}`}}},
 		{"restore confirm", []string{"restore", "confirm", "--plan", "plan-1", "--actor", "alice", "--yes"}, "", func(f *fakeManager) {
 			f.on("POST", "/api/restore/confirm", fixtureConfirm)
 		}, []wantRequest{{"POST", "/api/restore/confirm", nil, `{"plan_id":"plan-1","actor":"alice"}`}}},
@@ -506,6 +538,32 @@ func TestRestoreConfirmTypedAcceptsAndRejects(t *testing.T) {
 	}
 }
 
+func TestAgentsDeleteTypedAcceptsAndRejects(t *testing.T) {
+	f := newFakeManager(t)
+	f.on("DELETE", "/api/agents/ag-1", `{}`)
+	code, stdout, stderr := execCLI(t, f, "ag-1\n", "agents", "delete", "ag-1")
+	if code != 0 {
+		t.Fatalf("typed delete exit %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Deleted agent ag-1") {
+		t.Fatalf("delete should confirm: %q", stdout)
+	}
+	assertRequestTable(t, f, []wantRequest{{"DELETE", "/api/agents/ag-1", nil, ""}})
+
+	f2 := newFakeManager(t)
+	f2.on("DELETE", "/api/agents/ag-1", `{}`)
+	code, _, stderr = execCLI(t, f2, "wrong-id\n", "agents", "delete", "ag-1")
+	if code == 0 {
+		t.Fatal("mismatched typed delete should fail")
+	}
+	if !strings.Contains(stderr, "mismatch") {
+		t.Fatalf("stderr should report mismatch, got %q", stderr)
+	}
+	if len(f2.requests) != 0 {
+		t.Fatalf("rejected delete must send no request: %+v", f2.requests)
+	}
+}
+
 func TestRestoreExecuteRequiresYesOrEXECUTE(t *testing.T) {
 	f := newFakeManager(t)
 	f.on("POST", "/api/restore/execute", fixtureRestore)
@@ -592,6 +650,13 @@ func TestEndpointTablePinned(t *testing.T) {
 		"auth.me":         {mGet, "/api/auth/me"},
 		"agents.list":     {mGet, "/api/agents"},
 		"agents.show":     {mGet, "/api/agents/{id}"},
+		"agents.revoke":   {mPost, "/api/agents/{id}/revoke"},
+		"agents.delete":   {mDelete, "/api/agents/{id}"},
+		"agents.describe": {mGet, "/api/agents/{id}/update"},
+		"agents.update":   {mPost, "/api/agents/{id}/update"},
+		"updates.check":   {mPost, "/api/agents/updates/check"},
+		"updates.list":    {mGet, "/api/agents/updates/artifacts"},
+		"updates.delete":  {mDelete, "/api/agents/updates/artifacts/{id}"},
 		"policies.list":   {mGet, "/api/policies"},
 		"policies.show":   {mGet, "/api/policies/{id}"},
 		"jobs.list":       {mGet, "/api/jobs/"},

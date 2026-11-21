@@ -21,6 +21,7 @@ type planRequest struct {
 	Destination string   `json:"destination,omitempty"`
 	TargetDB    string   `json:"target_db,omitempty"`
 	Order       []string `json:"order,omitempty"`
+	TargetAgent string   `json:"target_agent_id,omitempty"`
 	RequestedBy string   `json:"requested_by"`
 }
 
@@ -91,7 +92,7 @@ func (a *app) newRestoreCommand() *cobra.Command {
 }
 
 func (a *app) newRestorePlanCommand() *cobra.Command {
-	var kind, snapshot, snapshots, engine, paths, destination, targetDB, order, requestedBy string
+	var kind, snapshot, snapshots, engine, paths, destination, targetDB, order, targetAgent, requestedBy string
 	cmd := &cobra.Command{
 		Use:   "plan --kind KIND --snapshot ID --requested-by WHO",
 		Short: "Plan a restore (POST /api/restore/plan)",
@@ -119,7 +120,8 @@ func (a *app) newRestorePlanCommand() *cobra.Command {
 				Engine: strings.TrimSpace(engine), Paths: splitCSV(paths),
 				Destination: strings.TrimSpace(destination),
 				TargetDB:    strings.TrimSpace(targetDB),
-				Order:       splitCSV(order), RequestedBy: strings.TrimSpace(requestedBy),
+				Order:       splitCSV(order), TargetAgent: strings.TrimSpace(targetAgent),
+				RequestedBy: strings.TrimSpace(requestedBy),
 			}
 			raw, err := a.call(cmd, "restore.plan", nil, nil, body)
 			if err != nil {
@@ -163,6 +165,7 @@ func (a *app) newRestorePlanCommand() *cobra.Command {
 	cmd.Flags().StringVar(&destination, "destination", "", "alternate destination")
 	cmd.Flags().StringVar(&targetDB, "target-db", "", "target database name (database restores)")
 	cmd.Flags().StringVar(&order, "order", "", "comma-separated restore order (stack restores)")
+	cmd.Flags().StringVar(&targetAgent, "target-agent", "", "restore to a different agent id (default: source agent)")
 	cmd.Flags().StringVar(&requestedBy, "requested-by", "", "requesting user (required)")
 	return cmd
 }

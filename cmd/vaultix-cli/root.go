@@ -43,6 +43,7 @@ once, or export VAULTIX_MANAGER_URL and VAULTIX_API_KEY.`,
 		a.newBackupCommand(),
 		a.newRestoreCommand(),
 		a.newAPIKeysCommand(),
+		a.newUpdatesCommand(),
 		newVersionCommand(),
 	)
 	return root
