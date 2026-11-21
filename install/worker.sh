@@ -208,10 +208,11 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=vaultix
-Group=vaultix
-# NOTE: for Docker discovery the vaultix user must be in the docker group
-# (highly privileged; only enable when Docker integration is configured).
+# Root by design (2026-11-21): a backup agent must read root-only sources
+# and restore anywhere (e.g. /etc/traefik). Filesystem sandboxing is
+# therefore off; the remaining hardening below still applies.
+User=root
+Group=root
 # Enrollment secret / overrides; optional file, absent by default.
 EnvironmentFile=-/etc/vaultix/agent.env
 # Agent config file (viper): manager URL, TLS, log level, data dir.
@@ -225,15 +226,8 @@ WorkingDirectory=/var/lib/vaultix
 LogsDirectory=vaultix
 StateDirectory=vaultix
 StateDirectoryMode=0750
-# Hardening: agent reads backup sources (read-only mounts stay readable) and
-# shells out to db tools; confine writes to its state/log dirs plus its own
-# binary (manager-ordered self-update swaps this file; the installer chowns
-# it to vaultix:vaultix for the same reason).
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/vaultix /var/log/vaultix /usr/local/bin/vaultix-agent
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
