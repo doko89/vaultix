@@ -50,7 +50,7 @@ type releaseJSON struct {
 // LatestRelease returns the repo's latest release.
 func (c *Client) LatestRelease(ctx context.Context) (updateuc.Release, error) {
 	var out updateuc.Release
-	body, err := c.get(ctx, c.api+"/repos/"+c.repo+"/releases/latest", 1<<20)
+	body, err := c.get(ctx, c.api+"/repos/"+c.repo+"/releases/latest", 1<<20, "application/json")
 	if err != nil {
 		return out, err
 	}
@@ -79,14 +79,14 @@ func (c *Client) Download(ctx context.Context, url string, maxBytes int64) ([]by
 	if maxBytes <= 0 {
 		return nil, fmt.Errorf("ghrelease: maxBytes must be positive")
 	}
-	return c.get(ctx, url, maxBytes)
+	return c.get(ctx, url, maxBytes, "application/octet-stream")
 }
 
 // get performs a capped GET with timeout + retries on transient failures.
-func (c *Client) get(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
+func (c *Client) get(ctx context.Context, url string, maxBytes int64, accept string) ([]byte, error) {
 	var last error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		data, retry, err := c.getOnce(ctx, url, maxBytes)
+		data, retry, err := c.getOnce(ctx, url, maxBytes, accept)
 		if err == nil {
 			return data, nil
 		}
@@ -103,14 +103,14 @@ func (c *Client) get(ctx context.Context, url string, maxBytes int64) ([]byte, e
 	return nil, last
 }
 
-func (c *Client) getOnce(ctx context.Context, url string, maxBytes int64) (data []byte, retry bool, err error) {
+func (c *Client) getOnce(ctx context.Context, url string, maxBytes int64, accept string) (data []byte, retry bool, err error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("ghrelease: build request: %w", err)
 	}
-	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("Accept", accept)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, true, fmt.Errorf("ghrelease: GET %s: %w", url, err)
