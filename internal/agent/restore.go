@@ -455,7 +455,7 @@ func normalizeRestorePaths(paths []string) ([]string, error) {
 	out := make([]string, 0, len(paths))
 	seen := make(map[string]bool, len(paths))
 	for _, p := range paths {
-		c := path.Clean(strings.TrimSpace(p))
+		c := normalizeWantPath(p)
 		if c == "" || c == "." {
 			return nil, fmt.Errorf("invalid restore path %q: empty path", p)
 		}
@@ -477,23 +477,30 @@ func normalizeRestorePaths(paths []string) ([]string, error) {
 // agent is not told the source root; archive-relative wants match by exact
 // or dir-prefix comparison. Traversal and absolute entry names can never
 // match: no want cleans to ".." or carries a leading slash past its root.
+// Backslashes normalize to slashes so Windows-style wants ("C:\data")
+// match slash-form archive entries.
 func matchRestoreWants(entry string, wants []string) []string {
-	e := path.Clean(strings.TrimPrefix(strings.TrimSpace(entry), "./"))
-	if e == "" || e == "." || e == ".." || strings.HasPrefix(e, "../") || strings.HasPrefix(e, "/") {
+	e := normalizeWantPath(entry)
+	if e == "" || e == "." || e == ".." || strings.HasPrefix(e, "../") || strings.HasPrefix(e, "/") || isWindowsAbs(e) {
 		return nil
 	}
 	var hits []string
-	for _, w := range wants {
-		if strings.HasPrefix(w, "/") {
+	for _, raw := range wants {
+		// Match on the normalized form but report the caller's
+		// original: matched keys must round-trip through
+		// orderedMatched/orderedMissing.
+		w := normalizeWantPath(raw)
+		abs := strings.HasPrefix(w, "/") || isWindowsAbs(w)
+		if abs {
 			if strings.HasSuffix(w, "/"+e) {
-				hits = append(hits, w)
+				hits = append(hits, raw)
 				continue
 			}
 			// Directory request: the entry extends a segment-aligned
 			// tail of the want ("/srv/data" covers "data/a.txt").
-			for t := strings.TrimPrefix(w, "/"); ; {
-				if strings.HasPrefix(e, t+"/") {
-					hits = append(hits, w)
+			for t := stripAbsPrefix(w); ; {
+				if t != "" && strings.HasPrefix(e, t+"/") {
+					hits = append(hits, raw)
 					break
 				}
 				i := strings.Index(t, "/")
@@ -505,10 +512,37 @@ func matchRestoreWants(entry string, wants []string) []string {
 			continue
 		}
 		if e == w || strings.HasPrefix(e, w+"/") {
-			hits = append(hits, w)
+			hits = append(hits, raw)
 		}
 	}
 	return hits
+}
+
+// normalizeWantPath cleans one entry/want for comparison: backslashes
+// become slashes (Windows-style input), then path.Clean applies.
+func normalizeWantPath(s string) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\\", "/")
+	return path.Clean(strings.TrimPrefix(s, "./"))
+}
+
+// isWindowsAbs reports drive-letter absolute paths: "C:/...".
+// (UNC collapses to a leading slash under path.Clean, so the "/"
+// check already covers it.)
+func isWindowsAbs(s string) bool {
+	return len(s) >= 3 && isDriveLetter(s[0]) && s[1] == ':' && s[2] == '/'
+}
+
+func isDriveLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// stripAbsPrefix drops the root from an absolute want for segment
+// alignment ("C:/srv/data" -> "srv/data").
+func stripAbsPrefix(w string) string {
+	if isWindowsAbs(w) && len(w) >= 3 && w[1] == ':' {
+		return strings.TrimPrefix(w[2:], "/")
+	}
+	return strings.TrimPrefix(w, "/")
 }
 
 // orderedMatched returns the wants present in matched, in wants order.

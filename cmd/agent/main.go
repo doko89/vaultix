@@ -11,6 +11,9 @@ import (
 var version = "0.0.0-dev"
 
 func main() {
+	if maybeRunService() {
+		return
+	}
 	if err := newRootCommand().Execute(); err != nil {
 		os.Exit(1)
 	}

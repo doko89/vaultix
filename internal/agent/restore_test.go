@@ -389,6 +389,10 @@ func TestNormalizeRestorePaths(t *testing.T) {
 		_, err := normalizeRestorePaths([]string{bad})
 		require.Error(t, err, "path %q must be rejected", bad)
 	}
+
+	got, err = normalizeRestorePaths([]string{`C:\srv\data\a.txt`, `C:\srv\data`})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"C:/srv/data/a.txt", "C:/srv/data"}, got)
 }
 
 func TestMatchRestoreWants(t *testing.T) {
@@ -418,6 +422,13 @@ func TestMatchRestoreWants(t *testing.T) {
 		{"/abs", "/abs", false},
 		{"data/../../evil", "/evil", false},
 		{"data/../../evil", "evil", false},
+		// Windows-style wants match slash-form entries.
+		{`data/a.txt`, `C:\srv\data\a.txt`, true},
+		{`data/sub/c.txt`, `C:\srv\data`, true},
+		{`data/a.txt`, `C:/srv/data/a.txt`, true},
+		{`data/a.txt`, `D:\other\a.txt`, false},
+		{`C:/evil`, `C:/evil`, false},
+		{`C:\evil`, `C:\evil`, false},
 	}
 	for _, tc := range cases {
 		hits := matchRestoreWants(tc.entry, []string{tc.want})

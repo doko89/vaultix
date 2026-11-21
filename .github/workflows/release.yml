@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        goos: [linux]
+        goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
@@ -40,11 +40,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - uses: actions/setup-node@v4
+        if: matrix.goos == 'linux'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: build web UI
+        if: matrix.goos == 'linux'
         run: |
           npm --prefix web ci
           npm --prefix web run build
@@ -58,14 +60,20 @@ jobs:
           # All binaries share `var version` in package main (cmd/manager +
           # cmd/agent + cmd/vaultix-cli); there is no separate commit symbol,
           # so the short SHA rides along in the version string: v1.2.3+abc1234.
+          # Windows assets carry .exe so they run on download; the manager
+          # only ships on linux (compose deployment), agent+cli ship everywhere.
           VERSION="${GITHUB_REF_NAME}+${GITHUB_SHA:0:7}"
           echo "version: ${VERSION}"
+          EXT=""
+          [ "${GOOS}" = "windows" ] && EXT=".exe"
+          if [ "${GOOS}" = "linux" ]; then
+            go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "dist/vaultix-manager-${GOOS}-${GOARCH}" ./cmd/manager
+          fi
           go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-            -o "dist/vaultix-manager-${GOOS}-${GOARCH}" ./cmd/manager
+            -o "dist/vaultix-agent-${GOOS}-${GOARCH}${EXT}" ./cmd/agent
           go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-            -o "dist/vaultix-agent-${GOOS}-${GOARCH}" ./cmd/agent
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-            -o "dist/vaultix-cli-${GOOS}-${GOARCH}" ./cmd/vaultix-cli
+            -o "dist/vaultix-cli-${GOOS}-${GOARCH}${EXT}" ./cmd/vaultix-cli
           ls -la dist/
       - uses: actions/upload-artifact@v4
         with:
@@ -130,16 +138,18 @@ jobs:
             cat dist/sha256sums.txt
             echo '```'
             echo
-            echo "Installers: \`server.sh\` (manager via compose) and \`worker.sh\`"
-            echo "(agent binary + systemd). See README Quick setup."
+            echo "Installers: \`server.sh\` (manager via compose), \`worker.sh\`"
+            echo "(agent binary + systemd), \`worker-macos.sh\` (agent + launchd),"
+            echo "and \`worker-windows.ps1\` (agent + Windows service)."
+            echo "See README Quick setup."
           } > "${NOTES}"
           # Re-running a tag release replaces assets instead of failing.
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" dist/* install/server.sh install/worker.sh \
+            gh release upload "${TAG}" dist/* install/server.sh install/worker.sh install/worker-macos.sh install/worker-windows.ps1 \
               --clobber
             gh release edit "${TAG}" --notes-file "${NOTES}"
           else
-            gh release create "${TAG}" dist/* install/server.sh install/worker.sh \
+            gh release create "${TAG}" dist/* install/server.sh install/worker.sh install/worker-macos.sh install/worker-windows.ps1 \
               --title "${TAG}" --notes-file "${NOTES}"
           fi
 

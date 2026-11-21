@@ -92,8 +92,9 @@ release-dry: ## Dry-run release binaries (linux/amd64) into dist/ with CI naming
 install-check: ## Validate installer scripts (bash -n + shellcheck when available)
 	bash -n install/server.sh
 	bash -n install/worker.sh
+	bash -n install/worker-macos.sh
 	@if command -v shellcheck >/dev/null; then \
-		shellcheck -S warning install/server.sh install/worker.sh; \
+		shellcheck -S warning install/server.sh install/worker.sh install/worker-macos.sh; \
 	else \
 		echo "warning: shellcheck not installed — bash -n passed"; \
 	fi

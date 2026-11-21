@@ -35,6 +35,24 @@ Required: `MANAGER_URL` (or `--manager`) and `VAULTIX_ENROLL_TOKEN` (or `--token
 the single-use token from step 2 of the manager installer's output. Check with
 `systemctl status vaultix-agent` and `journalctl -u vaultix-agent -f`.
 
+macOS (launchd daemon, runs as root):
+
+```bash
+curl -fsSL https://github.com/doko89/vaultix/releases/latest/download/worker-macos.sh \
+  | sudo MANAGER_URL=https://<manager-host>:8443 VAULTIX_ENROLL_TOKEN=<token> bash -s --
+```
+
+Windows (Administrator PowerShell; agent runs as a LocalSystem service):
+
+```powershell
+Invoke-WebRequest https://github.com/doko89/vaultix/releases/latest/download/worker-windows.ps1 -OutFile worker-windows.ps1
+.\worker-windows.ps1 -Manager https://<manager-host>:8443 -Token <token>
+```
+
+Notes: Windows self-update via the manager is not supported yet (swap the
+binary + restart the service manually); Windows file selectors accept both
+`C:\data` and `C:/data` spellings.
+
 **3. CLI (your workstation).** Download `vaultix-cli-linux-amd64` (or `-arm64`)
 from the latest release, mint a key with your login session, then verify it:
 

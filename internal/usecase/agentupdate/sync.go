@@ -32,9 +32,15 @@ type ReleaseAsset struct {
 
 // wantedBinaries maps release asset names to platforms. sha256sumsFile
 // carries the checksums release.yml publishes next to the binaries.
+// wantedBinaries maps exact release asset names to platforms. Windows
+// assets carry .exe so they run on download.
 var wantedBinaries = map[string][2]string{
-	"vaultix-agent-linux-amd64": {"linux", "amd64"},
-	"vaultix-agent-linux-arm64": {"linux", "arm64"},
+	"vaultix-agent-linux-amd64":       {"linux", "amd64"},
+	"vaultix-agent-linux-arm64":       {"linux", "arm64"},
+	"vaultix-agent-darwin-amd64":      {"darwin", "amd64"},
+	"vaultix-agent-darwin-arm64":      {"darwin", "arm64"},
+	"vaultix-agent-windows-amd64.exe": {"windows", "amd64"},
+	"vaultix-agent-windows-arm64.exe": {"windows", "arm64"},
 }
 
 const sha256sumsFile = "sha256sums.txt"
