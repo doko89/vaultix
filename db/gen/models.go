@@ -245,7 +245,7 @@ type RestoreJob struct {
 	ErrorCode       pgtype.Text        `json:"error_code"`
 	ErrorMessage    pgtype.Text        `json:"error_message"`
 	Attempts        int32              `json:"attempts"`
-	RequestedBy     pgtype.UUID        `json:"requested_by"`
+	RequestedBy     pgtype.Text        `json:"requested_by"`
 	ConfirmedAt     pgtype.Timestamptz `json:"confirmed_at"`
 	QueuedAt        pgtype.Timestamptz `json:"queued_at"`
 	StartedAt       pgtype.Timestamptz `json:"started_at"`

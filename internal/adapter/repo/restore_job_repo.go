@@ -33,10 +33,6 @@ func (r *RestoreJobRepo) CreateJob(ctx context.Context, j *domain.RestoreJob) er
 	if err != nil {
 		return err
 	}
-	requestedBy, err := mustOptUUID(j.CreatedBy, "created_by id")
-	if err != nil {
-		return err
-	}
 	paths, err := encodeJSON(nonNilStrings(j.Paths))
 	if err != nil {
 		return err
@@ -47,7 +43,7 @@ func (r *RestoreJobRepo) CreateJob(ctx context.Context, j *domain.RestoreJob) er
 		RestoreType:     restoreTypeFor(j),
 		SourcePaths:     paths,
 		DestinationPath: textOrNull(j.TargetPath),
-		RequestedBy:     requestedBy,
+		RequestedBy:     textOrNull(j.CreatedBy),
 	}
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
@@ -192,7 +188,7 @@ func mapRestoreJob(row gen.RestoreJob) (domain.RestoreJob, error) {
 	}
 	approvedBy := ""
 	if row.ConfirmedAt.Valid {
-		approvedBy = uuidString(row.RequestedBy)
+		approvedBy = textOrEmpty(row.RequestedBy)
 	}
 	return domain.RestoreJob{
 		ID:           uuidString(row.ID),
@@ -207,7 +203,7 @@ func mapRestoreJob(row gen.RestoreJob) (domain.RestoreJob, error) {
 		ApprovedBy:   approvedBy,
 		StartedAt:    timePtr(row.StartedAt),
 		FinishedAt:   timePtr(row.FinishedAt),
-		CreatedBy:    uuidString(row.RequestedBy),
+		CreatedBy:    textOrEmpty(row.RequestedBy),
 		CreatedAt:    timeOrZero(row.CreatedAt),
 		UpdatedAt:    timeOrZero(row.UpdatedAt),
 	}, nil

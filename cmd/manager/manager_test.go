@@ -295,7 +295,8 @@ func TestCollectRealMigrations(t *testing.T) {
 	// Phase 3 db cleanup adds 00012 (application stacks).
 	// API keys track adds 00013 (user API keys).
 	// Agent updates track adds 00014 (hosted binaries + update slots).
-	require.Len(t, migrations, 14, "base schema has 14 migrations")
+	// Restore actor fix adds 00015 (requested_by UUID to TEXT).
+	require.Len(t, migrations, 15, "base schema has 15 migrations")
 	for i, m := range migrations {
 		assert.Equal(t, int64(i+1), m.Version)
 		assert.NotEmpty(t, m.Up, "migration %d needs Up statements", m.Version)

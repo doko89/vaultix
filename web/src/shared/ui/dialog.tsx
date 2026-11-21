@@ -18,16 +18,24 @@ export interface DialogProps {
 
 export function Dialog({ open, title, description, onClose, children, wide }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
 
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  // Runs on open only: focusing here must not depend on onClose identity,
+  // or every parent re-render (e.g. each keystroke in a page-level input)
+  // would yank focus back to the panel. Escape always calls the latest.
   useEffect(() => {
     if (!open) return;
     panelRef.current?.focus();
     function onKey(event: KeyboardEvent): void {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

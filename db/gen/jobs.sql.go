@@ -201,7 +201,7 @@ type CreateRestoreJobParams struct {
 	RestoreType     string      `json:"restore_type"`
 	SourcePaths     []byte      `json:"source_paths"`
 	DestinationPath pgtype.Text `json:"destination_path"`
-	RequestedBy     pgtype.UUID `json:"requested_by"`
+	RequestedBy     pgtype.Text `json:"requested_by"`
 }
 
 func (q *Queries) CreateRestoreJob(ctx context.Context, arg CreateRestoreJobParams) (RestoreJob, error) {

@@ -595,6 +595,16 @@ func TestIntegrationRestoreJobs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, got.Paths)
 
+	// Actor names (not UUIDs) must round-trip: execute records the
+	// confirming actor's display name in requested_by.
+	named := &domain.RestoreJob{
+		AgentID: agentID, SnapshotID: snap.ID, CreatedBy: "op-" + suffix,
+	}
+	require.NoError(t, repos.RestoreJobs.CreateJob(ctx, named))
+	gotNamed, err := repos.RestoreJobs.GetJob(ctx, named.ID)
+	require.NoError(t, err)
+	require.Equal(t, "op-"+suffix, gotNamed.CreatedBy)
+
 	got.State = domain.JobRunning
 	require.NoError(t, repos.RestoreJobs.UpdateJob(ctx, got))
 
